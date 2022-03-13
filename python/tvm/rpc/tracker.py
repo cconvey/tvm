@@ -51,6 +51,9 @@ import struct
 import json
 from tvm.contrib.popen_pool import PopenWorker
 
+import os
+logging.basicConfig(level=os.environ.get("LOGLEVEL", "INFO"))
+
 try:
     from tornado import ioloop
     from . import tornado_util
@@ -64,7 +67,7 @@ from . import base
 from .base import RPC_TRACKER_MAGIC, TrackerCode
 
 logger = logging.getLogger("RPCTracker")
-
+logger.setLevel(logging.DEBUG)
 
 class Scheduler(object):
     """Abstract interface of scheduler."""
@@ -231,6 +234,7 @@ class TCPEventHandler(tornado_util.TCPHandler):
 
     def call_handler(self, args):
         """Event handler when json request arrives."""
+        logger.debug('call_handler: args={}'.format(args))
         code = args[0]
         if code == TrackerCode.PUT:
             key = args[1]
@@ -287,10 +291,12 @@ class TCPEventHandler(tornado_util.TCPHandler):
 
     def on_close(self):
         self._tracker.close(self)
+        logger.debug('on_close')
 
     def on_error(self, err):
         logger.warning("%s: Error in RPC Tracker: %s", self.name(), err)
         self.close()
+        logger.debug('on_error')
 
 
 class TrackerServerHandler(object):

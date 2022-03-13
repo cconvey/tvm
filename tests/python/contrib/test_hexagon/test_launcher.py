@@ -21,6 +21,7 @@ import sys
 import pytest
 import numpy as np
 import logging
+#import time
 
 import tvm.testing
 from tvm import te
@@ -39,6 +40,132 @@ RPC_SERVER_PORT = 7070
 # The reason is that an RPC session cannot be gracefully closed without
 # triggering TIME_WAIT state on the server socket. This prevents another
 # server to bind to the same port until the wait time elapses.
+
+@requires_hexagon_toolchain
+def test_add_hvx(android_serial_number, tvm_tracker_host, tvm_tracker_port, adb_server_socket):
+    for dtype in ['int8',]:
+        for sched_type in [1,2,]:
+            for mem_scope in [None, "global.vtcm"]:
+                version_name = 'dtype:{}-schedtype:{}-memscope:{}'.format(dtype, str(sched_type), str(mem_scope))
+
+                print("CONFIGURATION: {}".format(version_name))
+                #time.sleep(5)
+
+                dtype_bits = tvm._ffi.runtime_ctypes.DataType(dtype).bits
+
+                HVX_VECTOR_BYTES=128
+
+                assert dtype_bits % 8 == 0
+                dtype_bytes = dtype_bits // 8
+
+                elem_per_hvx_vector = HVX_VECTOR_BYTES // dtype_bytes
+
+                # Note!  We're providing the complete input tensor shapes now,
+                # whereas the original code only reveals the exact shape when
+                # about to call the kernel.
+
+                shape = [4, elem_per_hvx_vector,]
+
+                A = tvm.te.placeholder(shape, dtype=dtype)
+                B = tvm.te.placeholder(shape, dtype=dtype)
+                C = tvm.te.compute(A.shape, lambda i,j: A[i,j] + B[i,j], name="C")
+
+                #TODO: see if anyone cares that this segfaults
+                #foozle = tvm.lower(sched1)
+
+                sched = tvm.te.create_schedule(C.op)
+
+                if sched_type == 1:
+                    pass
+                elif sched_type == 2:
+                    sched[C].vectorize(C.op.axis[1])
+                else:
+                    raise Exception("Unknown schedule type")
+
+                foozle = tvm.lower(sched, [A,B,C], "foo")
+
+                report_path = "/tmp/cconvey-report-dtype-{}-sched{}.txt".format(dtype, sched_type)
+                with open(report_path, 'w') as f:
+                    f.write("LOWERED IR MODULE:\n")
+                    f.write(str(foozle))
+                    f.write('\n')
+
+                target_hexagon = tvm.target.hexagon("v68", link_params=True)
+                func = tvm.build(
+                    sched, [A, B, C], tvm.target.Target(target_hexagon, host=target_hexagon), name="add_hvx"
+                )
+
+                temp = utils.tempdir()
+                if False:
+                    dso_binary = "test_binary.so".format(version_name)
+                    dso_binary_path = temp.relpath(dso_binary)
+                else:
+                    dso_binary = "test_binary-{}.so".format(version_name)
+                    dso_binary_path = "/tmp/cconvey-{}.so".format(version_name)
+                func.save(dso_binary_path)
+
+                print("SAVED BINARY TO HOST PATH: {}".format(dso_binary_path))
+
+                #import pdb; pdb.set_trace()
+
+                if not android_serial_number:
+                    pytest.skip(msg="Skip hardware test since ANDROID_SERIAL_NUMBER is not set.")
+
+                if False:
+                    rpc_info = {
+                        "rpc_tracker_host": tvm_tracker_host,
+                        "rpc_tracker_port": tvm_tracker_port,
+                        "rpc_server_port": RPC_SERVER_PORT + 0,  # See note at the beginning of the file
+                        "adb_server_socket": adb_server_socket,
+                    }
+                    launcher = HexagonLauncher(serial_number=android_serial_number, rpc_info=rpc_info)
+                    launcher.upload(dso_binary_path, dso_binary)
+                    launcher.start_server()
+
+                    with launcher.start_session() as sess:
+                        mod = launcher.load_module(dso_binary, sess)
+
+                        # TODO: I think I was hitting an error because I tried to write into
+                        # "B_data.numpy()[...]"; i.e. going through the TVM wrapper object
+                        # after it was created.  Not sure if this is necessary.
+                        host_numpy_A_data = np.ndarray(shape, dtype=dtype)
+                        host_numpy_B_data = np.ndarray(shape, dtype=dtype)
+                        host_numpy_C_data = np.ndarray(shape, dtype=dtype)
+                        host_numpy_C_data_expected = np.ndarray(shape, dtype=dtype)
+
+                        def intended_val_A(i,j):
+                            return i + j
+
+                        def intended_val_B(i,j):
+                            return (i+1) * (j+1)
+
+                        for i in range(shape[0]):
+                            for j in range(shape[1]):
+                                host_numpy_A_data[i,j] = intended_val_A(i,j)
+                                host_numpy_B_data[i,j] = intended_val_B(i,j)
+                                host_numpy_C_data_expected[i,j] = intended_val_A(i,j) + intended_val_B(i,j)
+
+                        #A_data = tvm.nd.array(host_numpy_A_data, device=sess.device, mem_scope=mem_scope)
+                        #B_data = tvm.nd.array(host_numpy_B_data, device=sess.device, mem_scope=mem_scope)
+                        #C_data = tvm.nd.array(np.ndarray(shape, dtype=dtype), device=sess.device, mem_scope=mem_scope)
+
+                        A_data = tvm.nd.empty(shape, dtype, sess.device, mem_scope)
+                        A_data.copyfrom(host_numpy_A_data)
+
+                        B_data = tvm.nd.empty(shape, dtype, sess.device, mem_scope)
+                        B_data.copyfrom(host_numpy_B_data)
+
+                        C_data = tvm.nd.empty(shape, dtype, sess.device, mem_scope)
+                        #C_data.copyfrom(host_numpy_C_data)
+
+                        #import pdb; pdb.set_trace()
+
+                        mod["add_hvx"](A_data, B_data, C_data)
+
+                        result = C_data.numpy()
+                        assert (result == host_numpy_C_data_expected).all()
+
+                    launcher.stop_server()
 
 
 @requires_hexagon_toolchain
@@ -69,6 +196,7 @@ def test_add(android_serial_number, tvm_tracker_host, tvm_tracker_port, adb_serv
         "adb_server_socket": adb_server_socket,
     }
     launcher = HexagonLauncher(serial_number=android_serial_number, rpc_info=rpc_info)
+    import pdb; pdb.set_trace()
     launcher.upload(dso_binary_path, dso_binary)
     launcher.start_server()
 

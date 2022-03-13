@@ -21,6 +21,7 @@ import abc
 import datetime
 import multiprocessing as mp
 import os
+import os.path
 import pathlib
 import signal
 import stat
@@ -302,6 +303,7 @@ class HexagonLauncherAndroid(HexagonLauncherRPC):
     def _copy_to_remote(
         self, local_path: Union[str, pathlib.Path], remote_path: Union[str, pathlib.Path]
     ):
+        print("ZZZ: remote_path='{}'".format(remote_path))
         """Abstract method implementation. See description in HexagonLauncherRPC."""
         subprocess.check_call(
             self._adb_device_sub_cmd + ["push", str(local_path), str(remote_path)]
@@ -310,6 +312,16 @@ class HexagonLauncherAndroid(HexagonLauncherRPC):
     def _create_remote_directory(self, remote_path: Union[str, pathlib.Path]):
         """Abstract method implementation. See description in HexagonLauncherRPC."""
         subprocess.check_call(self._adb_device_sub_cmd + ["shell", "mkdir", "-p", str(remote_path)])
+
+        #p = pathlib.Path(remote_path)
+
+        #if p != p.root:
+        #    #Create the parent directory using 'make -p ...', for convenience.
+        #    subprocess.check_call(self._adb_device_sub_cmd + ["shell", "mkdir", "-p", str(p.parent)])
+
+        ## Use 'mkdir' *without* '-p' so that, if it already exists, we fail rather than
+        ## silently causing mayhem.
+        #subprocess.check_call(self._adb_device_sub_cmd + ["shell", "mkdir", str(p)])
 
     def _copy_binaries(self):
         """Upload Android server binaries."""
