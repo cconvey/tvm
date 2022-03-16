@@ -25,6 +25,7 @@
 #include <cstdio>
 #include <cstdlib>
 #if defined(__linux__) || defined(__ANDROID__)
+#include <sys/types.h>
 #include <unistd.h>
 #endif
 #include <dmlc/logging.h>
@@ -101,6 +102,14 @@ void PrintArgs(const RpcServerArgs& args) {
   LOG(INFO) << "custom_addr = " << args.custom_addr;
   LOG(INFO) << "work_dir    = " << args.work_dir;
   LOG(INFO) << "silent      = " << ((args.silent) ? ("True") : ("False"));
+
+  char buf[512 + 1];
+  getcwd(buf, 512);
+  buf[512] = '\0';
+
+  LOG(INFO) << "Actual curent working directory: " << buf;
+  LOG(INFO) << "My PID: " << getpid();
+  LOG(INFO) << "My PPID: " << getppid();
 }
 
 #if defined(__linux__) || defined(__ANDROID__)

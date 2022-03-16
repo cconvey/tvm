@@ -1,4 +1,4 @@
-# Licensed to the Apache Software Foundation (ASF) under one
+# Licensed to the Apache Software Fouopndation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
 # regarding copyright ownership.  The ASF licenses this file
@@ -32,6 +32,8 @@ import tvm
 from ..._ffi import libinfo
 from .session import Session
 
+import sys
+import time
 
 HEXAGON_RPC_LIB_DIR = os.environ.get("HEXAGON_RPC_LIB_DIR")
 
@@ -313,6 +315,9 @@ class HexagonLauncherAndroid(HexagonLauncherRPC):
         """Abstract method implementation. See description in HexagonLauncherRPC."""
         subprocess.check_call(self._adb_device_sub_cmd + ["shell", "mkdir", "-p", str(remote_path)])
 
+        import sys
+        sys.stdout.write('XXXXXX: remote_path: "{}"\n'.format(remote_path))
+
         #p = pathlib.Path(remote_path)
 
         #if p != p.root:
@@ -391,19 +396,40 @@ class HexagonLauncherAndroid(HexagonLauncherRPC):
 
     def start_server(self):
         """Abstract method implementation. See description in HexagonLauncherRPC."""
+
+        sys.stdout.write('XXXXXX: start_server ENTER: workspace={}\n'.format(self._workspace))
+
         self._copy_binaries()
         self._run_server_script()
 
+        sys.stdout.write('XXXXXX: start_server EXIT: workspace={}\n'.format(self._workspace))
+
     def stop_server(self):
         """Abstract method implementation. See description in HexagonLauncherRPC."""
+        sys.stdout.write('XXXXXX: stop_server ENTER: workspace={}\n'.format(self._workspace))
+
+        print('ABOUT TO KILL CHILDREN AAAA')
+        #import pdb; pdb.set_trace()
+
         # Kill process children
         subprocess.Popen(
-            self._adb_device_sub_cmd + ["shell", f"pkill -P `cat {self._workspace}/rpc_pid.txt`"]
+            self._adb_device_sub_cmd + ["shell", f"pkill -KILL -V -P `cat {self._workspace}/rpc_pid.txt` >{self._workspace}/rpc_pid.txt-kill-children.txt 2>{self._workspace}/rpc_pid.txt-kill-children-stderr.txt"]
         )
+
+        #time.sleep(2)
+
+        #print('ABOUT TO KILL PARENT')
+        #import pdb; pdb.set_trace()
+
         # Kill main process
         subprocess.Popen(
-            self._adb_device_sub_cmd + ["shell", f"kill `cat {self._workspace}/rpc_pid.txt`"]
+            self._adb_device_sub_cmd + ["shell", f"kill `cat {self._workspace}/rpc_pid.txt` >{self._workspace}/rpc_pid.txt-kill-parent.txt 2>{self._workspace}/rpc_pid.txt-kill-parent-stderr.txt"]
         )
+
+        print('AFTER WILL PARENT')
+        #import pdb; pdb.set_trace()
+
+        sys.stdout.write('XXXXXX: stop_server EXIT: workspace={}\n'.format(self._workspace))
 
 
 class HexagonLauncherSimulator(HexagonLauncherRPC):

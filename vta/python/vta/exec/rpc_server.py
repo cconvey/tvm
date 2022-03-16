@@ -155,15 +155,25 @@ def main():
 
         tvm.register_func("tvm.rpc.server.start", vta.exec.rpc_server.server_start, override=True)
 
-    server = rpc.Server(
-        args.host,
-        args.port,
-        args.port_end,
-        key=args.key,
-        tracker_addr=tracker_addr,
-        server_init_callback=server_init_callback,
-    )
-    server.proc.join()
+    with open('/data/local/tmp/hexagon_test/pid-{}.txt'.format(os.getpid()), 'w') as f:
+        print('AAAAA: my PID={}'.format(os.getpid()), file=f, flush=True)
+        print('AAAAA: my PID={}'.format(os.getpid()), flush=True)
+
+        server = rpc.Server(
+            args.host,
+            args.port,
+            args.port_end,
+            key=args.key,
+            tracker_addr=tracker_addr,
+            server_init_callback=server_init_callback,
+        )
+
+        print('AAAAA: server processes PID={}'.server.proc._proc.pid, file=f, flush=True)
+        print('AAAAA: server processes PID={}'.server.proc._proc.pid, flush=True)
+
+        server.proc.join()
+        print('AAAAA: server process join complete', file=f, flush=True)
+        print('AAAAA: server process join complete', flush=True)
 
 
 if __name__ == "__main__":

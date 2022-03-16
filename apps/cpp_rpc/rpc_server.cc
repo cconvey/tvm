@@ -28,9 +28,11 @@
 #include <sys/wait.h>
 #endif
 #include <chrono>
+#include <fstream>
 #include <future>
 #include <iostream>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 
@@ -173,19 +175,39 @@ class RPCServer {
 
       int timeout = GetTimeOutFromOpts(opts);
 #if defined(__linux__) || defined(__ANDROID__) || defined(__APPLE__)
+      using namespace std;
+      ostringstream filename;
+      filename << "pid-" << getpid() << "-ppid-" << getppid() << ".txt";
+      ofstream f(filename.str());
+
       // step 3: serving
       if (timeout != 0) {
         const pid_t timer_pid = fork();
         if (timer_pid == 0) {
+          ostringstream filename2;
+          filename2 << "pid-" << getpid() << "-ppid-" << getppid() << ".txt";
+          ofstream f2(filename.str());
+          f2 << "ZZZZ I'm the timer process. PID=" << getpid() << " PPID=" << getppid() << endl;
+          f2 << "ZZZZ timer process about to sleep. timeput= " << timeout << endl;
           // Timer process
           sleep(timeout);
+          f2 << "ZZZZ timer process about to _exit. timeout= " << timeout << endl;
+          f2.close();
           _exit(0);
         }
 
+        f << "ZZZZ timer_pid = " << timer_pid << endl;
+
         const pid_t worker_pid = fork();
         if (worker_pid == 0) {
+          ostringstream filename3;
+          filename3 << "pid-" << getpid() << "-ppid-" << getppid() << ".txt";
+          ofstream f3(filename.str());
+          f3 << "ZZZZ I'm the worker process. PID=" << getpid() << " PPID=" << getppid() << endl;
           // Worker process
           ServerLoopProc(conn, addr, work_dir_);
+          f3 << "ZZZZ worker process about to _exit. timeout= " << timeout << endl;
+          f3.close();
           _exit(0);
         }
 
@@ -196,7 +218,7 @@ class RPCServer {
         } else if (finished_first == worker_pid) {
           kill(timer_pid, SIGTERM);
         } else {
-          LOG(INFO) << "Child pid=" << finished_first << " unexpected, but still continue.";
+          f << "Child pid=" << finished_first << " unexpected, but still continue." << endl;
         }
 
         int status_second = 0;
@@ -204,10 +226,10 @@ class RPCServer {
 
         // Logging.
         if (finished_first == timer_pid) {
-          LOG(INFO) << "Child pid=" << worker_pid << " killed (timeout = " << timeout
-                    << "), Process status = " << status_second;
+          f << "Child pid=" << worker_pid << " killed (timeout = " << timeout
+            << "), Process status = " << status_second << endl;
         } else if (finished_first == worker_pid) {
-          LOG(INFO) << "Child pid=" << timer_pid << " killed, Process status = " << status_second;
+          f << "Child pid=" << timer_pid << " killed, Process status = " << status_second << endl;
         }
       } else {
         auto pid = fork();
@@ -218,7 +240,7 @@ class RPCServer {
         // Wait for the result
         int status = 0;
         wait(&status);
-        LOG(INFO) << "Child pid=" << pid << " exited, Process status =" << status;
+        f << "Child pid=" << pid << " exited, Process status =" << status << endl;
       }
 #elif defined(WIN32)
       auto start_time = high_resolution_clock::now();
@@ -235,7 +257,7 @@ class RPCServer {
       ServerLoopProc(conn, addr, work_dir_);
 #endif
       // close from our side.
-      LOG(INFO) << "Socket Connection Closed";
+      f << "Socket Connection Closed" << endl;
       conn.Close();
     }
   }
