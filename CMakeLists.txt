@@ -773,7 +773,8 @@ if(USE_CCACHE) # True for AUTO, ON, /path/to/ccache
     message(STATUS "Setting ccache path to " "${PATH_TO_CCACHE}")
   endif()
   # Set the flag for ccache
-  set(CXX_COMPILER_LAUNCHER PATH_TO_CCACHE)
+  set(CXX_COMPILER_LAUNCHER "${PATH_TO_CCACHE}")
+  #set(CXX_COMPILER_LAUNCHER PATH_TO_CCACHE)
 endif(USE_CCACHE)
 
 find_and_set_linker(${USE_ALTERNATIVE_LINKER})

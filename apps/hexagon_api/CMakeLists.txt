@@ -14,6 +14,34 @@ include(ExternalProject)
 # Optional variable:
 #   USE_OUTPUT_BINARY_DIR (Path to copy the output binaries to)
 
+if(USE_CCACHE) # True for AUTO, ON, /path/to/ccache
+  if("${USE_CCACHE}" STREQUAL "AUTO") # Auto mode
+    find_program(CCACHE_FOUND ccache)
+    if(CCACHE_FOUND)
+      message(STATUS "Found the path to ccache, enabling ccache")
+      set(PATH_TO_CCACHE ccache)
+    else()
+      message(STATUS "Didn't find the path to CCACHE, disabling ccache")
+    endif(CCACHE_FOUND)
+    #elseif("${USE_CCACHE}" MATCHES ${IS_TRUE_PATTERN})
+  elseif(USE_CCACHE)
+    find_program(CCACHE_FOUND ccache)
+    if(CCACHE_FOUND)
+      message(STATUS "Found the path to ccache, enabling ccache")
+      set(PATH_TO_CCACHE ccache)
+    else()
+      message(FATAL_ERROR "Cannot find ccache. Set USE_CCACHE mode to AUTO or OFF to build without ccache. USE_CCACHE=" "${USE_CCACHE}")
+    endif(CCACHE_FOUND)
+  else() # /path/to/ccache
+    set(PATH_TO_CCACHE USE_CCACHE)
+    message(STATUS "Setting ccache path to " "${PATH_TO_CCACHE}")
+  endif()
+  # Set the flag for ccache
+  set(CXX_COMPILER_LAUNCHER "${PATH_TO_CCACHE}")
+endif(USE_CCACHE)
+
+message(WARNING "CXX_COMPILER_LAUNCHER = '${CXX_COMPILER_LAUNCHER}'")
+
 set(TVM_SOURCE_DIR "${CMAKE_SOURCE_DIR}/../..")
 
 if(DEFINED USE_OUTPUT_BINARY_DIR)
@@ -26,10 +54,15 @@ file(MAKE_DIRECTORY ${HEXAGON_API_BINARY_DIR})
 # Build X86 binaries:
 # - tvm_rpc_x86
 
+#message(FATAL_ERROR "MAKE='${MAKE}' CMAKE_MAKE_PROGRAM='${CMAKE_MAKE_PROGRAM}'")
+
 ExternalProject_Add(x86_tvm_runtime_rpc
   SOURCE_DIR "${TVM_SOURCE_DIR}"
-  BUILD_COMMAND $(MAKE) runtime tvm_rpc
+  #BUILD_COMMAND $(MAKE) runtime tvm_rpc
+  BUILD_COMMAND ${CMAKE_MAKE_PROGRAM} runtime tvm_rpc
   CMAKE_ARGS
+    "-DUSE_CCACHE=${USE_CCACHE}"
+    "-DCMAKE_CXX_COMPILER_LAUNCHER=${CXX_COMPILER_LAUNCHER}"
     "-DUSE_HEXAGON_TOOLCHAIN=${USE_HEXAGON_TOOLCHAIN}"
     "-DCMAKE_CXX_STANDARD=14"
     "-DUSE_LIBBACKTRACE=OFF"
@@ -56,8 +89,11 @@ ExternalProject_Add_Step(x86_tvm_runtime_rpc copy_rpc_server
 
 ExternalProject_Add(android_tvm_runtime_rpc
   SOURCE_DIR "${TVM_SOURCE_DIR}"
-  BUILD_COMMAND $(MAKE) runtime tvm_rpc
+  BUILD_COMMAND ${CMAKE_MAKE_PROGRAM} runtime tvm_rpc
+  #BUILD_COMMAND $(MAKE) runtime tvm_rpc
   CMAKE_ARGS
+    "-DUSE_CCACHE=${USE_CCACHE}"
+    "-DCMAKE_CXX_COMPILER_LAUNCHER=${CXX_COMPILER_LAUNCHER}"
     "-DCMAKE_TOOLCHAIN_FILE=${USE_ANDROID_TOOLCHAIN}"
     "-DANDROID_PLATFORM=${ANDROID_PLATFORM}"
     "-DANDROID_ABI=${ANDROID_ABI}"
@@ -95,8 +131,11 @@ ExternalProject_Add_Step(android_tvm_runtime_rpc copy_rpc_server
 
 ExternalProject_Add(hexagon_tvm_runtime_rpc
   SOURCE_DIR "${TVM_SOURCE_DIR}"
-  BUILD_COMMAND $(MAKE) runtime hexagon_rpc_sim
+  BUILD_COMMAND ${CMAKE_MAKE_PROGRAM} runtime hexagon_rpc_sim
+  #BUILD_COMMAND $(MAKE) runtime hexagon_rpc_sim
   CMAKE_ARGS
+    "-DUSE_CCACHE=${USE_CCACHE}"
+    "-DCMAKE_CXX_COMPILER_LAUNCHER=${CXX_COMPILER_LAUNCHER}"
     "-DCMAKE_C_COMPILER=${USE_HEXAGON_TOOLCHAIN}/bin/hexagon-clang"
     "-DCMAKE_CXX_COMPILER=${USE_HEXAGON_TOOLCHAIN}/bin/hexagon-clang++"
     "-DUSE_HEXAGON_SDK=${USE_HEXAGON_SDK}"
