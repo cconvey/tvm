@@ -70,7 +70,7 @@ if __name__ == "__main__":
     available_cpus = nproc // executors
     num_cpus = max(available_cpus, 1)
 
-    sh.run("cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo ..", cwd=build_dir)
+    sh.run("cmake -DCMAKE_BUILD_TYPE=RelWithDebInfo -DUSE_CCACHE=OFF ..", cwd=build_dir)
     target = ""
     if args.cmake_target:
         target = args.cmake_target

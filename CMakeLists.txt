@@ -85,6 +85,7 @@ tvm_option(USE_BLAS "The blas library to be linked" none)
 tvm_option(USE_MKL "MKL root path when use MKL blas" OFF)
 tvm_option(USE_MKLDNN "Build with MKLDNN" OFF)
 tvm_option(USE_DNNL_CODEGEN "Enable MKLDNN (DNNL) codegen" OFF)
+tvm_option(USE_CCACHE "Use the 'ccache' compiler wrapper when building TVM" AUTO)
 tvm_option(USE_CUDNN "Build with cuDNN" OFF)
 tvm_option(USE_CUBLAS "Build with cuBLAS" OFF)
 tvm_option(USE_CUTLASS "Build with CUTLASS" OFF)
@@ -510,6 +511,103 @@ set(LIBINFO_FILE ${CMAKE_CURRENT_LIST_DIR}/src/support/libinfo.cc)
 add_lib_info(${LIBINFO_FILE})
 list(REMOVE_ITEM COMPILER_SRCS ${LIBINFO_FILE})
 
+# Caches the build.
+# Note that ccache-3.x doesn't support nvcc well, so CUDA kernels may never hit the cache and still
+# need to be re-compiled every time. Using ccache 4.0+ can resolve this issue.
+#
+# NOTE: CMAKE_C[XX]_COMPILER_LAUNCHER only affects build targets that we add *later*.
+# So we want this logic to appear towards the top of this CMakeLists.txt file.
+if(USE_CCACHE) # True for AUTO, ON, /path/to/ccache
+
+  #-------------------------------------------------------------------------------------------------
+  # Decode the value of USE_CCACHE.
+  # If ccache is required but can't be found, fail with an error message.
+  #-------------------------------------------------------------------------------------------------
+  if("${USE_CCACHE}" STREQUAL "AUTO") # Auto mode
+      set(CCACHE_PROGRAM_CANDIDATE ccache)
+      set(CCACHE_REQUIRED FALSE)
+  elseif("${USE_CCACHE}" MATCHES ${IS_TRUE_PATTERN})
+      set(CCACHE_PROGRAM_CANDIDATE ccache)
+      set(CCACHE_REQUIRED TRUE)
+  else() # /path/to/ccache
+      set(CCACHE_PROGRAM_CANDIDATE "${USE_CCACHE}")
+      set(CCACHE_REQUIRED TRUE)
+  endif()
+
+  find_program(CCACHE_PROGRAM "${CCACHE_PROGRAM_CANDIDATE}")
+  if (CCACHE_PROGRAM)
+      message(STATUS "Found ccache program: '${CCACHE_PROGRAM}'")
+  else()
+      # Note: Once we require cmake >= 3.18, we can simplify this logic using
+      # `find_program(... REQUIRED)`.
+      if (CCACHE_REQUIRED)
+          message(FATAL_ERROR "Unable to find ccache program: '${CCACHE_PROGRAM_CANDIDATE}'")
+      else()
+          message(STATUS "Unable to find ccache program: '${CCACHE_PROGRAM_CANDIDATE}'")
+      endif()
+  endif()
+
+  #-------------------------------------------------------------------------------------------------
+  # Compute the value of WOULD_CHANGE_COMPILER_LAUNCHER.
+  #-------------------------------------------------------------------------------------------------
+  if (CCACHE_PROGRAM)
+      if ((NOT "${CMAKE_C_COMPILER_LAUNCHER}" STREQUAL "") AND
+          (NOT "${CMAKE_C_COMPILER_LAUNCHER}" STREQUAL "${CCACHE_PROGRAM}"))
+          set(WOULD_CHANGE_C_COMPILER_LAUNCHER TRUE)
+      else()
+          set(WOULD_CHANGE_C_COMPILER_LAUNCHER FALSE)
+      endif()
+
+      if ((NOT "${CMAKE_CXX_COMPILER_LAUNCHER}" STREQUAL "") AND
+          (NOT "${CMAKE_CXX_COMPILER_LAUNCHER}" STREQUAL "${CCACHE_PROGRAM}"))
+          set(WOULD_CHANGE_CXX_COMPILER_LAUNCHER TRUE)
+      else()
+          set(WOULD_CHANGE_CXX_COMPILER_LAUNCHER FALSE)
+      endif()
+
+      if (WOULD_CHANGE_C_COMPILER_LAUNCHER OR WOULD_CHANGE_CXX_COMPILER_LAUNCHER)
+          set(WOULD_CHANGE_COMPILER_LAUNCHER TRUE)
+      else()
+          set(WOULD_CHANGE_COMPILER_LAUNCHER FALSE)
+      endif()
+  else()
+      set(WOULD_CHANGE_COMPILER_LAUNCHER FALSE)
+  endif(CCACHE_PROGRAM)
+
+  #-------------------------------------------------------------------------------------------------
+  # Apply the requested policy.
+  #-------------------------------------------------------------------------------------------------
+  if (CCACHE_PROGRAM)
+      if (WOULD_CHANGE_COMPILER_LAUNCHER)
+          if (CCACHE_REQUIRED)
+              message(FATAL_ERROR
+                  " Using ccache would require overriding existing value of"
+                  " CMAKE_C_COMPILER_LAUNCHER ('${CMAKE_C_COMPILER_LAUNCHER}') and/or"
+                  " CMAKE_CXX_COMPILER_LAUNCHER ('${CMAKE_CXX_COMPILER_LAUNCHER}')"
+                  )
+          else()
+              message(WARNING
+                  "Skipping ccache: "
+                  " Using ccache would require overriding existing value of"
+                  " CMAKE_C_COMPILER_LAUNCHER ('${CMAKE_C_COMPILER_LAUNCHER}') and/or"
+                  " CMAKE_CXX_COMPILER_LAUNCHER ('${CMAKE_CXX_COMPILER_LAUNCHER}')"
+                  )
+          endif(CCACHE_REQURIED)
+
+      else(WOULD_CHANGE_COMPILER_LAUNCHER)
+          message(STATUS "Using ccache program '${CCACHE_PROGRAM}'")
+          set(CMAKE_C_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+          set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+
+      endif(WOULD_CHANGE_COMPILER_LAUNCHER)
+
+  else (CCACHE_PROGRAM)
+      message(STATUS "Skipping ccache: ccache program not found.")
+
+  endif(CCACHE_PROGRAM)
+
+endif(USE_CCACHE)
+
 add_library(tvm_objs OBJECT ${COMPILER_SRCS})
 add_library(tvm_runtime_objs OBJECT ${RUNTIME_SRCS})
 add_library(tvm_libinfo_objs OBJECT ${LIBINFO_FILE})
@@ -758,35 +856,6 @@ if(BUILD_FOR_HEXAGON)
     add_dependencies(runtime hexagon_rpc_skel)
   endif()
 endif()
-
-#Caches the build.
-#Note that ccache-3.x doesn't support nvcc well, so CUDA kernels may never hit the cache and still
-#need to be re-compiled every time. Using ccache 4.0+ can resolve this issue.
-
-if(USE_CCACHE) # True for AUTO, ON, /path/to/ccache
-  if("${USE_CCACHE}" STREQUAL "AUTO") # Auto mode
-    find_program(CCACHE_FOUND ccache)
-    if(CCACHE_FOUND)
-      message(STATUS "Found the path to ccache, enabling ccache")
-      set(PATH_TO_CCACHE ccache)
-    else()
-      message(STATUS "Didn't find the path to CCACHE, disabling ccache")
-    endif(CCACHE_FOUND)
-  elseif("${USE_CCACHE}" MATCHES ${IS_TRUE_PATTERN})
-    find_program(CCACHE_FOUND ccache)
-    if(CCACHE_FOUND)
-      message(STATUS "Found the path to ccache, enabling ccache")
-      set(PATH_TO_CCACHE ccache)
-    else()
-      message(FATAL_ERROR "Cannot find ccache. Set USE_CCACHE mode to AUTO or OFF to build without ccache. USE_CCACHE=" "${USE_CCACHE}")
-    endif(CCACHE_FOUND)
-  else() # /path/to/ccache
-    set(PATH_TO_CCACHE USE_CCACHE)
-    message(STATUS "Setting ccache path to " "${PATH_TO_CCACHE}")
-  endif()
-  # Set the flag for ccache
-  set(CXX_COMPILER_LAUNCHER PATH_TO_CCACHE)
-endif(USE_CCACHE)
 
 find_and_set_linker(${USE_ALTERNATIVE_LINKER})
 
