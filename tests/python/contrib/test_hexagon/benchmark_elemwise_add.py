@@ -28,9 +28,7 @@ import tvm.script
 from tvm.script import tir as T
 from tvm import te
 from tvm.contrib.hexagon.build import HexagonLauncherRPC
-from .benchmark_util import BenchmarksTable
-
-RPC_SERVER_PORT = 7070
+from .benchmark_util import *
 
 # This is a fixed detail of the v68 architecture.
 HVX_VECTOR_BYTES = 128
@@ -47,7 +45,7 @@ _CSV_COLUMN_ORDER = [
     # Identifies which TE-compute / TIRScript is used as the basis for the
     # benchmarked primfunc. Only needs to be meaningful to humans.
     "basic_kernel",
-    # The tensors 'element type
+    # The tensors' element type
     "dtype",
     # When applicable, indicates the particular variation of schedules
     # apply by the Python code. Decoding this may require looking at this
@@ -85,30 +83,6 @@ print("-" * 80)
 print()
 
 
-def _get_benchmark_id(keys_dict):
-    """
-    Given a dictionary with the distinguishing characteristics of a particular benchmark
-    line item, compute a string that uniquely identifies the benchmark.
-
-    The returned string:
-    - is a valid directory name on the host's file system
-    - should be easy for humans to parse
-
-    Note that the insertion order for `keys_dict` does affect the computed name.
-    """
-    return "-".join([f"{k}:{v}" for k, v in keys_dict.items()])
-
-
-def _get_benchmark_decription(keys_dict):
-    """
-    Similar to `_get_benchmark_id`, but the focus is on human-readability.
-
-    The returned string contains no line-breaks, but may contain spaces and
-    other characters that make it unsuitable for use as a filename.
-    """
-    return " ".join([f"{k}={v}" for k, v in keys_dict.items()])
-
-
 @tvm.testing.requires_hexagon
 def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
     """
@@ -119,7 +93,7 @@ def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
     # Create and benchmark a single primfunc.
     # If an unexpected problem occurs, raise an exception.  Otherwise add a row of output to 'bt'.
     def test_one_config(dtype, mem_scope, num_vectors_per_tensor):
-        basic_kernel = "ewise-tvmscript-1"
+        basic_kernel = "ewise-add-ts1"
 
         # The distinguishing characteristics of this benchmark line item.
         keys_dict = {
@@ -129,8 +103,8 @@ def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
             "num_vectors_per_tensor": num_vectors_per_tensor,
         }
 
-        host_files_dir_name = _get_benchmark_id(keys_dict)
-        desc = _get_benchmark_decription(keys_dict)
+        host_files_dir_name = compute_benchmark_id(keys_dict)
+        desc = compute_benchmark_decription(keys_dict)
 
         print(f"CONFIGURATION: {desc}")
 
@@ -189,7 +163,6 @@ def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
 
             target_hexagon = tvm.target.hexagon("v68", link_params=True)
             func = tvm.build(
-                # sched,
                 ir_module,
                 [A, B, C],
                 tvm.target.Target(target_hexagon, host=target_hexagon),
@@ -302,7 +275,7 @@ def test_elemwise_add_te(hexagon_launcher: HexagonLauncherRPC):
     # Create and benchmark a single primfunc.
     # If an unexpected problem occurs, raise an exception.  Otherwise add a row of output to 'bt'.
     def test_one_config(dtype, sched_type, mem_scope, num_vectors_per_tensor):
-        basic_kernel = "elemwise-add-te"
+        basic_kernel = "ewise-add-te"
 
         # The distinguishing characteristics of this benchmark line item.
         keys_dict = {
@@ -313,8 +286,8 @@ def test_elemwise_add_te(hexagon_launcher: HexagonLauncherRPC):
             "num_vectors_per_tensor": num_vectors_per_tensor,
         }
 
-        host_files_dir_name = _get_benchmark_id(keys_dict)
-        desc = _get_benchmark_decription(keys_dict)
+        host_files_dir_name = compute_benchmark_id(keys_dict)
+        desc = compute_benchmark_decription(keys_dict)
 
         print(f"CONFIGURATION: {desc}")
 
