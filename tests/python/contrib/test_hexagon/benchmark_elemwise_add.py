@@ -94,6 +94,9 @@ def _get_elemwise_add_te_kernel(shape, dtype: str, mem_scope: str, sched_type) -
     Returns a kernel implementation suitable for passing to 'tvm.build(...)' and 'tvm.lower(...)'.
     """
 
+    # This is a very crude way to estimate if the workload can fit in VTCM.
+    # The only justification is that empirically it works.
+    num_vectors_per_tensor = shape[0]
     if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
         raise UnsupportedException('Expect to exceed VTCM budget.')
 
@@ -133,8 +136,13 @@ def _get_elemwise_add_ts1_kernel(shape, dtype: str, mem_scope: str) -> tvm.ir.mo
     if mem_scope == 'global.vtcm':
         raise UnsupportedException('This benchmark kernel does not yet support VTCM buffers.')
 
+
     # This check is currently elided by the one above, but it should become relevant as soon
     # as we add VTCM support to this kernel generator.
+    #
+    # This is a very crude way to estimate if the workload can fit in VTCM.
+    # The only justification is that empirically it works.
+    num_vectors_per_tensor = shape[0]
     if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
         raise UnsupportedException('Expect to exceed VTCM budget.')
 
@@ -180,9 +188,9 @@ def test_elemwise_add_ts1(hexagon_launcher: HexagonLauncherRPC):
 
         print(f"CONFIGURATION: {desc}")
 
-        if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
-            _BT.record_skip(**keys_dict, comments="Expect to exceed VTCM budget.")
-            return
+        #if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
+        #    _BT.record_skip(**keys_dict, comments="Expect to exceed VTCM budget.")
+        #    return
 
         host_files_dir = os.path.join(_HOST_OUTPUT_DIR, host_files_dir_name)
         os.mkdir(host_files_dir)
@@ -351,10 +359,10 @@ def test_elemwise_add_te(hexagon_launcher: HexagonLauncherRPC):
 
         print(f"CONFIGURATION: {desc}")
 
-        if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
-            result = dict(keys_dict)
-            _BT.record_skip(**keys_dict, comments="Expect to exceed VTCM budget.")
-            return
+        #if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
+        #    result = dict(keys_dict)
+        #    _BT.record_skip(**keys_dict, comments="Expect to exceed VTCM budget.")
+        #    return
 
         host_files_dir = os.path.join(_HOST_OUTPUT_DIR, host_files_dir_name)
         os.mkdir(host_files_dir)
@@ -374,11 +382,20 @@ def test_elemwise_add_te(hexagon_launcher: HexagonLauncherRPC):
             elem_per_hvx_vector,
         ]
 
+        #-------------------------------------------------------------------------------------------
+        # OLD WAY
+        #-------------------------------------------------------------------------------------------
+        # This is a very crude way to estimate if the workload can fit in VTCM.
+        # The only justification is that empirically it works.
+        num_vectors_per_tensor = shape[0]
+        if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
+            raise UnsupportedException('Expect to exceed VTCM budget.')
+
         A = tvm.te.placeholder(shape, dtype=dtype)
         B = tvm.te.placeholder(shape, dtype=dtype)
         C = tvm.te.compute(A.shape, lambda i, j: A[i, j] + B[i, j], name="C")
 
-        sched = tvm.te.create_schedule(C.op) # tvm.te.schedule.Schedule
+        sched : tvm.te.schedule.Schedule = tvm.te.create_schedule(C.op)
 
         if sched_type == 1:
             pass
@@ -394,6 +411,19 @@ def test_elemwise_add_te(hexagon_launcher: HexagonLauncherRPC):
         if mem_scope == "global.vtcm":
             for tensor in [A, B, C]:
                 sched[tensor].transform_layout(lambda i, j: [i, te.AXIS_SEPARATOR, j])
+
+        #-------------------------------------------------------------------------------------------
+        # NEW WAY
+        #-------------------------------------------------------------------------------------------
+
+        #sched = _get_elemwise_add_te_kernel(shape, dtype, mem_scope, sched_type)
+
+        #A = tvm.te.placeholder(shape, dtype=dtype)
+        #B = tvm.te.placeholder(shape, dtype=dtype)
+        #C = tvm.te.placeholder(shape, dtype=dtype)
+
+        #-------------------------------------------------------------------------------------------
+        assert sched is not None
 
         # This module is only created so humans can inspect its IR.
         module_for_ir_dump = tvm.lower(sched, [A, B, C], "foo") # tvm.ir.module.IRModule
@@ -453,6 +483,15 @@ def test_elemwise_add_te(hexagon_launcher: HexagonLauncherRPC):
                     tvm.testing.assert_allclose(host_numpy_C_data_expected, result)
 
                     _BT.record_success(timing_result, **keys_dict, host_files_dir=host_files_dir)
+
+            except UnsupportedException as e:
+                print()
+                print(f"SKIP: {e.message}")
+                f.write("SKIPPED:\n")
+                f.write(f"{e.message}\n")
+                _BT.record_skip(
+                        **keys_dict, comments=f"Unsupported configuration: {e.message}"
+                )
 
             except Exception as err:
                 print()
