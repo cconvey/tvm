@@ -154,7 +154,7 @@ def compute_benchmark_id(keys_dict):
     return "-".join([f"{k}:{v}" for k, v in keys_dict.items()])
 
 
-def copmute_benchmark_decription(keys_dict):
+def compute_benchmark_decription(keys_dict):
     """
     Similar to `_get_benchmark_id`, but the focus is on human-readability.
 

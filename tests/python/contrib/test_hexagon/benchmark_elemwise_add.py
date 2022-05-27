@@ -82,9 +82,81 @@ print("OUTPUT DIRECTORY: {}".format(_HOST_OUTPUT_DIR))
 print("-" * 80)
 print()
 
+class UnsupportedException(Exception):
+    """
+    Indicates that the specified benchmarking configuration is known to
+    currently be unsupported.  The Exception message may provide more detail.
+    """
+    pass
+
+def _get_elemwise_add_te_kernel(shape, dtype: str, mem_scope: str, sched_type) -> tvm.te.schedule.Schedule:
+    """
+    Returns a kernel implementation suitable for passing to 'tvm.build(...)' and 'tvm.lower(...)'.
+    """
+
+    if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
+        raise UnsupportedException('Expect to exceed VTCM budget.')
+
+    A = tvm.te.placeholder(shape, dtype=dtype)
+    B = tvm.te.placeholder(shape, dtype=dtype)
+    C = tvm.te.compute(A.shape, lambda i, j: A[i, j] + B[i, j], name="C")
+
+    sched : tvm.te.schedule.Schedule = tvm.te.create_schedule(C.op)
+
+    if sched_type == 1:
+        pass
+    elif sched_type == 2:
+        sched[C].vectorize(C.op.axis[1])
+    else:
+        raise Exception("Unknown schedule type")
+
+    # If we're using VTCM, we *must* add a transform_layout step to the schedule.
+    # Otherwise the generated code will crash.
+    # As of 2022-04-12 the crash does not provide a useful error message to the
+    # host Python code.
+    if mem_scope == "global.vtcm":
+        for tensor in [A, B, C]:
+            sched[tensor].transform_layout(lambda i, j: [i, te.AXIS_SEPARATOR, j])
+
+    return sched
+
+def _get_elemwise_add_ts1_kernel(shape, dtype: str, mem_scope: str) -> tvm.ir.module.IRModule:
+    """
+    Returns a kernel implementation suitable for passing to 'tvm.build(...)' and 'tvm.lower(...)'.
+    """
+    # TVMScript can reference simple Python variables, but it doesn't
+    # curently support more complex Python expressions...
+    dim0_size = shape[0]
+    dim1_size = shape[1]
+    dtype_str = str(dtype)
+
+    if mem_scope == 'global.vtcm':
+        raise UnsupportedException('This benchmark kernel does not yet support VTCM buffers.')
+
+    # This check is currently elided by the one above, but it should become relevant as soon
+    # as we add VTCM support to this kernel generator.
+    if num_vectors_per_tensor == 2048 and mem_scope == "global.vtcm":
+        raise UnsupportedException('Expect to exceed VTCM budget.')
+
+    @tvm.script.ir_module
+    class MyModule:
+        @T.prim_func
+        def main(a: T.handle, b: T.handle, c: T.handle):
+            # We exchange data between function by handles, which are similar to pointer.
+            T.func_attr({"global_symbol": "main", "tir.noalias": True})
+            # Create buffer from handles.
+            A = T.match_buffer(a, shape, dtype=dtype)
+            B = T.match_buffer(b, shape, dtype=dtype)
+            C = T.match_buffer(c, shape, dtype=dtype)
+
+            for i in range(dim0_size):
+                for j in range(dim1_size):
+                    C[i, j] = A[i, j] + B[i, j]
+
+    return MyModule
 
 @tvm.testing.requires_hexagon
-def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
+def test_elemwise_add_ts1(hexagon_launcher: HexagonLauncherRPC):
     """
     Similar to `test_elemwise_add_te`, but starting with TensorScript rather than
     Tensor Expressions.
@@ -126,34 +198,13 @@ def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
             elem_per_hvx_vector,
         ]
 
-        # TVMScript can reference simple Python variables, but it doesn't
-        # curently support more complex Python expressions...
-        dim0_size = shape[0]
-        dim1_size = shape[1]
-        dtype_str = str(dtype)
-
-        @tvm.script.ir_module
-        class MyModule:
-            @T.prim_func
-            def main(a: T.handle, b: T.handle, c: T.handle):
-                # We exchange data between function by handles, which are similar to pointer.
-                T.func_attr({"global_symbol": "main", "tir.noalias": True})
-                # Create buffer from handles.
-                A = T.match_buffer(a, shape, dtype=dtype_str)
-                B = T.match_buffer(b, shape, dtype=dtype_str)
-                C = T.match_buffer(c, shape, dtype=dtype_str)
-
-                for i in range(dim0_size):
-                    for j in range(dim1_size):
-                        C[i, j] = A[i, j] + B[i, j]
-
-        ir_module = MyModule
+        ir_module = _get_elemwise_add_ts1_kernel(shape, dtype, mem_scope)
 
         A = tvm.te.placeholder(shape, dtype=dtype)
         B = tvm.te.placeholder(shape, dtype=dtype)
         C = tvm.te.placeholder(shape, dtype=dtype)
 
-        module_for_ir_dump = tvm.lower(ir_module, [A, B, C], "elemwise_add")
+        module_for_ir_dump = tvm.lower(ir_module, [A, B, C], "elemwise_add") # tvm.ir.module.IRModule
 
         report_path = os.path.join(host_files_dir, "out.txt")
         with open(report_path, "w") as f:
@@ -167,7 +218,7 @@ def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
                 [A, B, C],
                 tvm.target.Target(target_hexagon, host=target_hexagon),
                 name="elemwise_add",
-            )
+            ) # tvm.driver.build_module.OperatorModule
 
             host_dso_binary_path = os.path.join(host_files_dir, "test_binary.so")
             target_dso_binary_filename = "test_binary.so"
@@ -179,7 +230,7 @@ def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
 
             try:
                 with hexagon_launcher.start_session() as sess:
-                    mod = hexagon_launcher.load_module(target_dso_binary_filename, sess)
+                    mod = hexagon_launcher.load_module(target_dso_binary_filename, sess) # tvm.runtime.module.Module
 
                     host_numpy_A_data = np.ndarray(shape, dtype=dtype)
                     host_numpy_B_data = np.ndarray(shape, dtype=dtype)
@@ -210,6 +261,15 @@ def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
                     tvm.testing.assert_allclose(host_numpy_C_data_expected, result)
 
                     _BT.record_success(timing_result, host_files_dir=host_files_dir, **keys_dict)
+
+            except UnsupportedException as e:
+                print()
+                print(f"SKIP: {e.message}")
+                f.write("SKIPPED:\n")
+                f.write(f"{e.message}\n")
+                _BT.record_skip(
+                        **keys_dict, comments=f"Unsupported configuration: {e.message}"
+                )
 
             except Exception as err:
                 print()
@@ -318,7 +378,7 @@ def test_elemwise_add_te(hexagon_launcher: HexagonLauncherRPC):
         B = tvm.te.placeholder(shape, dtype=dtype)
         C = tvm.te.compute(A.shape, lambda i, j: A[i, j] + B[i, j], name="C")
 
-        sched = tvm.te.create_schedule(C.op)
+        sched = tvm.te.create_schedule(C.op) # tvm.te.schedule.Schedule
 
         if sched_type == 1:
             pass
@@ -336,7 +396,7 @@ def test_elemwise_add_te(hexagon_launcher: HexagonLauncherRPC):
                 sched[tensor].transform_layout(lambda i, j: [i, te.AXIS_SEPARATOR, j])
 
         # This module is only created so humans can inspect its IR.
-        module_for_ir_dump = tvm.lower(sched, [A, B, C], "foo")
+        module_for_ir_dump = tvm.lower(sched, [A, B, C], "foo") # tvm.ir.module.IRModule
 
         report_path = os.path.join(host_files_dir, "out.txt")
         with open(report_path, "w") as f:
