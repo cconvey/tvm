@@ -82,6 +82,59 @@ print("OUTPUT DIRECTORY: {}".format(_HOST_OUTPUT_DIR))
 print("-" * 80)
 print()
 
+def create_irmod_elemwise_add_ts1(
+        shape,
+        dtype,
+        mem_scope):
+    # TVMScript can reference simple Python variables, but its parser doesn't
+    # curently support more complex Python expressions...
+    dim0_size = shape[0]
+    dim1_size = shape[1]
+    dtype_str = str(dtype)
+
+    @tvm.script.ir_module
+    class MyModule:
+        @T.prim_func
+        def main(a: T.handle, b: T.handle, c: T.handle):
+            # We exchange data between function by handles, which are similar to pointer.
+            T.func_attr({"global_symbol": "main", "tir.noalias": True})
+            # Create buffer from handles.
+            A = T.match_buffer(a, shape, dtype=dtype_str)
+            B = T.match_buffer(b, shape, dtype=dtype_str)
+            C = T.match_buffer(c, shape, dtype=dtype_str)
+
+            for i in range(dim0_size):
+                for j in range(dim1_size):
+                    C[i, j] = A[i, j] + B[i, j]
+
+    return MyModule
+
+def create_irmod_elemwise_add_te(
+        shape,
+        dtype,
+        mem_scope,
+        sched_type):
+    A = tvm.te.placeholder(shape, dtype=dtype)
+    B = tvm.te.placeholder(shape, dtype=dtype)
+    C = tvm.te.compute(A.shape, lambda i, j: A[i, j] + B[i, j], name="C")
+
+    sched = tvm.te.create_schedule(C.op)
+
+    if sched_type == 1:
+        pass
+    elif sched_type == 2:
+        sched[C].vectorize(C.op.axis[1])
+    else:
+        raise Exception("Unknown schedule type")
+
+    # If we're using VTCM, we *must* add a transform_layout step to the schedule.
+    # Otherwise the generated code will crash.
+    # As of 2022-04-12 the crash does not provide a useful error message to the
+    # host Python code.
+    if mem_scope == "global.vtcm":
+        for tensor in [A, B, C]:
+            sched[tensor].transform_layout(lambda i, j: [i, te.AXIS_SEPARATOR, j])
+
 
 @tvm.testing.requires_hexagon
 def test_elemwise_add_tvmcript(hexagon_launcher: HexagonLauncherRPC):
