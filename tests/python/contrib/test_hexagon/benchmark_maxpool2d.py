@@ -28,7 +28,7 @@ import tvm.script
 from tvm.script import tir as T
 from tvm import te
 from tvm.contrib.hexagon.build import HexagonLauncherRPC
-from . import benchmark_util as bu
+from . import benchmark_util
 
 # This is a fixed detail of the v68 architecture.
 HVX_VECTOR_BYTES = 128
@@ -43,7 +43,7 @@ _SUPER_TARGET = tvm.target.Target(_HEXAGON_TARGET, host=_HEXAGON_TARGET)
 # triggering TIME_WAIT state on the server socket. This prevents another
 # server to bind to the same port until the wait time elapses.
 
-_BT = bu.BenchmarksTable()
+_BT = benchmark_util.BenchmarksTable()
 
 _CSV_COLUMN_ORDER = [
     # Identifies which TE-compute / TIRScript is used as the basis for the
@@ -89,23 +89,6 @@ print("-" * 80)
 print()
 
 
-class UnsupportedException(Exception):
-    """
-    Indicates that the specified benchmarking configuration is known to
-    currently be unsupported.  The Exception message may provide more detail.
-    """
-
-
-class NumericalAccuracyException(Exception):
-    """
-    Indicates that the benchmarking configuration appeared to run successfully,
-    but the output data didn't have the expected accuracy.
-    """
-
-
-from typing import Tuple
-
-
 def _get_irmod_elemwise_add(
     _PRIMFUNC_NAME: str, shape: list, dtype: str, mem_scope: str
 ) -> tvm.ir.module.IRModule:
@@ -118,7 +101,6 @@ def _get_irmod_elemwise_add(
 
     If the specified primfunc is known to be unsupported, raise an UnsupportedExcetion.
     """
-    assert len(shape) == 2
 
     # TVMScript can reference simple Python variables, but it doesn't
     # curently support more complex Python expressions...
@@ -129,7 +111,7 @@ def _get_irmod_elemwise_add(
     dtype_str = str(dtype)
 
     if mem_scope == "global.vtcm":
-        raise bu.UnsupportedException("This benchmark kernel does not yet support VTCM buffers.")
+        raise UnsupportedException("This benchmark kernel does not yet support VTCM buffers.")
 
         # This check is currently elided by the one above, but it should become relevant as soon
         # as we add VTCM support to this kernel generator.
@@ -147,7 +129,7 @@ def _get_irmod_elemwise_add(
         estimated_vtcm_needed_bytes = shape[0] * shape[1] * dtype_bytes * num_vtcm_tensors
 
         if estimated_vtcm_needed_bytes > estimated_vtcm_budget_bytes:
-            raise bu.UnsupportedException("Expect to exceed VTCM budget.")
+            raise UnsupportedException("Expect to exceed VTCM budget.")
 
     @tvm.script.ir_module
     class BenchmarkModule:
@@ -190,10 +172,10 @@ def _benchmark_hexagon_elementwise_add_kernel(
         "mem_scope": mem_scope,
     }
 
-    desc = bu.get_benchmark_decription(keys_dict)
+    desc = benchmark_util.get_benchmark_decription(keys_dict)
 
     # Create the host-side directory for this benchmark run's files / logs...
-    host_files_dir_name = bu.get_benchmark_id(keys_dict)
+    host_files_dir_name = benchmark_util.get_benchmark_id(keys_dict)
     host_files_dir_path = os.path.join(_HOST_OUTPUT_DIR, host_files_dir_name)
     os.mkdir(host_files_dir_path)
 
@@ -296,11 +278,11 @@ def _benchmark_hexagon_elementwise_add_kernel(
                         result, host_numpy_C_data_expected, rel_tolerance, abs_tolerance
                     )
                 except AssertionError as e:
-                    raise bu.NumericalAccuracyException(str(e))
+                    raise NumericalAccuracyException(str(e))
 
                 _BT.record_success(timing_result, **keys_dict)
 
-        except bu.NumericalAccuracyException as e:
+        except NumericalAccuracyException as e:
             print()
             print(f"FAIL: Numerical accuracy error. See log file.")
 
@@ -309,7 +291,7 @@ def _benchmark_hexagon_elementwise_add_kernel(
 
             _BT.record_fail(**keys_dict, comments=f"Numerical accuracy error. See log file.")
 
-        except bu.UnsupportedException as e:
+        except UnsupportedException as e:
             print()
             print(f"SKIP: {e}")
 
