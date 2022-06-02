@@ -28,7 +28,7 @@ import tvm.script
 from tvm.script import tir as T
 from tvm import te
 from tvm.contrib.hexagon.build import HexagonLauncherRPC
-from . import benchmark_util
+from . import benchmark_util as bu
 
 # This is a fixed detail of the v68 architecture.
 HVX_VECTOR_BYTES = 128
@@ -43,7 +43,7 @@ _SUPER_TARGET = tvm.target.Target(_HEXAGON_TARGET, host=_HEXAGON_TARGET)
 # triggering TIME_WAIT state on the server socket. This prevents another
 # server to bind to the same port until the wait time elapses.
 
-_BT = benchmark_util.BenchmarksTable()
+_BT = bu.BenchmarksTable()
 
 _CSV_COLUMN_ORDER = [
     # Identifies which TE-compute / TIRScript is used as the basis for the
@@ -129,7 +129,7 @@ def _get_irmod_elemwise_add(
     dtype_str = str(dtype)
 
     if mem_scope == "global.vtcm":
-        raise UnsupportedException("This benchmark kernel does not yet support VTCM buffers.")
+        raise bu.UnsupportedException("This benchmark kernel does not yet support VTCM buffers.")
 
         # This check is currently elided by the one above, but it should become relevant as soon
         # as we add VTCM support to this kernel generator.
@@ -147,7 +147,7 @@ def _get_irmod_elemwise_add(
         estimated_vtcm_needed_bytes = shape[0] * shape[1] * dtype_bytes * num_vtcm_tensors
 
         if estimated_vtcm_needed_bytes > estimated_vtcm_budget_bytes:
-            raise UnsupportedException("Expect to exceed VTCM budget.")
+            raise bu.UnsupportedException("Expect to exceed VTCM budget.")
 
     @tvm.script.ir_module
     class BenchmarkModule:
@@ -190,10 +190,10 @@ def _benchmark_hexagon_elementwise_add_kernel(
         "mem_scope": mem_scope,
     }
 
-    desc = benchmark_util.get_benchmark_decription(keys_dict)
+    desc = bu.get_benchmark_decription(keys_dict)
 
     # Create the host-side directory for this benchmark run's files / logs...
-    host_files_dir_name = benchmark_util.get_benchmark_id(keys_dict)
+    host_files_dir_name = bu.get_benchmark_id(keys_dict)
     host_files_dir_path = os.path.join(_HOST_OUTPUT_DIR, host_files_dir_name)
     os.mkdir(host_files_dir_path)
 
@@ -296,11 +296,11 @@ def _benchmark_hexagon_elementwise_add_kernel(
                         result, host_numpy_C_data_expected, rel_tolerance, abs_tolerance
                     )
                 except AssertionError as e:
-                    raise NumericalAccuracyException(str(e))
+                    raise bu.NumericalAccuracyException(str(e))
 
                 _BT.record_success(timing_result, **keys_dict)
 
-        except NumericalAccuracyException as e:
+        except bu.NumericalAccuracyException as e:
             print()
             print(f"FAIL: Numerical accuracy error. See log file.")
 
@@ -309,7 +309,7 @@ def _benchmark_hexagon_elementwise_add_kernel(
 
             _BT.record_fail(**keys_dict, comments=f"Numerical accuracy error. See log file.")
 
-        except UnsupportedException as e:
+        except bu.UnsupportedException as e:
             print()
             print(f"SKIP: {e}")
 

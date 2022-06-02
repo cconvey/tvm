@@ -18,6 +18,18 @@
 import csv
 
 
+class UnsupportedException(Exception):
+    """
+    Indicates that the specified benchmarking configuration is known to
+    currently be unsupported.  The Exception message may provide more detail.
+    """
+
+class NumericalAccuracyException(Exception):
+    """
+    Indicates that the benchmarking configuration appeared to run successfully,
+    but the output data didn't have the expected accuracy.
+    """
+
 class BenchmarksTable:
     """
     Stores/reports the result of benchmark runs.
