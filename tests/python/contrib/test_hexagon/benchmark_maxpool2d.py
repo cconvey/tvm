@@ -15,407 +15,229 @@
 # specific language governing permissions and limitations
 # under the License.
 
-import os
-import os.path
 import sys
 import pytest
 import numpy as np
-import logging
-import tempfile
 
 import tvm.testing
-import tvm.script
+from tvm import te, topi, tir
+from tvm.topi import testing
 from tvm.script import tir as T
-from tvm import te
-from tvm.contrib.hexagon.build import HexagonLauncherRPC
-from . import benchmark_util
-
-# This is a fixed detail of the v68 architecture.
-HVX_VECTOR_BYTES = 128
-
-_HEXAGON_TARGET = tvm.target.hexagon("v69", link_params=True)
-
-_SUPER_TARGET = tvm.target.Target(_HEXAGON_TARGET, host=_HEXAGON_TARGET)
-
-# NOTE on server ports:
-# These tests use different port numbers for the RPC server (7070 + ...).
-# The reason is that an RPC session cannot be gracefully closed without
-# triggering TIME_WAIT state on the server socket. This prevents another
-# server to bind to the same port until the wait time elapses.
-
-_BT = benchmark_util.BenchmarksTable()
-
-_CSV_COLUMN_ORDER = [
-    # Identifies which TE-compute / TIRScript is used as the basis for the
-    # benchmarked primfunc. Only needs to be meaningful to humans.
-    "basic_kernel",
-    # The tensors' element type
-    "dtype",
-    # When applicable, indicates the particular variation of schedules
-    # apply by the Python code. Decoding this may require looking at this
-    # script's source code.
-    "sched_type",
-    # The memory location of the tensors used during the execution of
-    # the primfunc.  We currently assume just one location.
-    # This will likely need to be generalized as we add more sophisticated
-    # primfuncs.
-    "mem_scope",
-    # For primfuncs that treat tensor buffers as collections of 1D vectors,
-    # this is the number of vectors in each tensor.
-    # This will likely need to be generalized as we add more sophisticated
-    # primfuncs.
-    "num_vectors_per_tensor",
-    # Reserved columns defined by the BenchmarksTable class.
-    "row_status",
-    "timings_min_usecs",
-    "timings_max_usecs",
-    "timings_median_usecs",
-    "timings_mean_usecs",
-    "timings_stddev_usecs",
-    # For benchmarks that produce files on the host file system, this indicates
-    # their location. Useful for post-mortem investigation of benchmark results.
-    "host_files_dir_path",
-    # Miscellaneous comments about the benchmark.
-    "comments",
-]
-
-_HOST_OUTPUT_DIR = tempfile.mkdtemp()
-
-_PRIMFUNC_NAME = "elemwise_add"
-
-print("-" * 80)
-print("OUTPUT DIRECTORY: {}".format(_HOST_OUTPUT_DIR))
-print("-" * 80)
-print()
-
-
-
-from typing import Tuple
-
-
-def _get_irmod_elemwise_add(
-    _PRIMFUNC_NAME: str, shape: list, dtype: str, mem_scope: str
-) -> tvm.ir.module.IRModule:
-    """
-    Return an IRModule containing a single primfunc, expressed as NS-TIR.
-
-    The primfunc implements elementwise-add. Its signature is (A,B,C), where
-    A and B are the input tensors, and C is the output tensor.
-    All three tensors have the specfied shape, dtype, and mem_scope.
-
-    If the specified primfunc is known to be unsupported, raise an UnsupportedExcetion.
-    """
-    assert len(shape) == 2
-
-    # TVMScript can reference simple Python variables, but it doesn't
-    # curently support more complex Python expressions...
-    (
-        dim0_size,
-        dim1_size,
-    ) = shape
-    dtype_str = str(dtype)
-
-    if mem_scope == "global.vtcm":
-        raise UnsupportedException("This benchmark kernel does not yet support VTCM buffers.")
-
-        # This check is currently elided by the one above, but it should become relevant as soon
-        # as we add VTCM support to this kernel generator.
-        #
-        # Also: The VTCM budget is a very rough estimate, based only on experience.
-        # Assuming that it's even reasonable to use a hard-coded estimate AT ALL, this number
-        # may need tweaking.
-        estimated_vtcm_budget_bytes = HVX_VECTOR_BYTES * 1024
-
-        dtype_bits = tvm._ffi.runtime_ctypes.DataType(dtype).bits
-        assert dtype_bits % 8 == 0
-        dtype_bytes = dtype_bits // 8
-
-        num_vtcm_tensors = 3
-        estimated_vtcm_needed_bytes = shape[0] * shape[1] * dtype_bytes * num_vtcm_tensors
-
-        if estimated_vtcm_needed_bytes > estimated_vtcm_budget_bytes:
-            raise UnsupportedException("Expect to exceed VTCM budget.")
-
-    @tvm.script.ir_module
-    class BenchmarkModule:
-        @T.prim_func
-        def main(a: T.handle, b: T.handle, c: T.handle):
-            # We exchange data between function by handles, which are similar to pointer.
-            T.func_attr({"global_symbol": "main", "tir.noalias": True})
-
-            A = T.match_buffer(a, shape, dtype=dtype)
-            B = T.match_buffer(b, shape, dtype=dtype)
-            C = T.match_buffer(c, shape, dtype=dtype)
-
-            for i in range(dim0_size):
-                for j in range(dim1_size):
-                    C[i, j] = A[i, j] + B[i, j]
-
-    return BenchmarkModule
-
-
-def _benchmark_hexagon_elementwise_add_kernel(
-    hexagon_launcher: HexagonLauncherRPC, shape: list, dtype: str, mem_scope: str
-):
-    """
-    Generate and benchmark a single elementwise-add kernel for Hexagon.
-
-    Produce these outputs:
-      - Printed status updates / results to stdout and/or stderr.
-
-      - Create a new subdirectory under _HOST_OUTPUT_DIR, and populate it with
-        various logs and intermediate files.
-
-      - Add to _BT a row describing this benchmark run.
-    """
-    # Represent the benchmark details in a form required by the benchmark table
-    # and for other logging...
-    keys_dict = {
-        "basic_kernel": "ewise-add",
-        "dtype": dtype,
-        "shape": shape,
-        "mem_scope": mem_scope,
-    }
-
-    desc = benchmark_util.get_benchmark_decription(keys_dict)
-
-    # Create the host-side directory for this benchmark run's files / logs...
-    host_files_dir_name = benchmark_util.get_benchmark_id(keys_dict)
-    host_files_dir_path = os.path.join(_HOST_OUTPUT_DIR, host_files_dir_name)
-    os.mkdir(host_files_dir_path)
-
-    keys_dict["host_files_dir_path"] = host_files_dir_path
-
-    log_file_path = os.path.join(host_files_dir_path, "out.txt")
-    with open(log_file_path, "w") as log_file:
-        print(f"CONFIGURATION: {desc}")
-        log_file.write(f"CONFIGURATION: {desc}\n")
-
-        try:
-            ns_tir_module = _get_irmod_elemwise_add(_PRIMFUNC_NAME, shape, dtype, mem_scope)
-
-            # Dump the primfunc NS-TIR (as text) to the log file...
-            lowered_mod = tvm.lower(ns_tir_module, _PRIMFUNC_NAME)
-            log_file.write("LOWERED IR MODULE:\n")
-            log_file.write(str(lowered_mod))
-            log_file.write("\n")
-
-            # Lower the primfunc's IRModule to Hexagon object code...
-            A = tvm.te.placeholder(shape, dtype=dtype)
-            B = tvm.te.placeholder(shape, dtype=dtype)
-            C = tvm.te.placeholder(shape, dtype=dtype)
-
-            built_module: tvm.driver.build_module.OperatorModule = tvm.build(
-                ns_tir_module,
-                [
-                    A,
-                    B,
-                    C,
-                ],
-                _SUPER_TARGET,
-                name=_PRIMFUNC_NAME,
-            )
-
-            # Create an actual Hexagon-native shared object file, initially stored on the
-            # host's file system...
-            host_dso_binary_path = os.path.join(host_files_dir_path, "test_binary.so")
-            built_module.save(host_dso_binary_path)
-            print(f"SAVED BINARY TO HOST PATH: {host_dso_binary_path}")
-
-            # Upload the .so to the Android device's file system (or wherever is appropriate
-            # when using the Hexagon simulator)...
-            target_dso_binary_filename = "test_binary.so"
-            hexagon_launcher.upload(host_dso_binary_path, target_dso_binary_filename)
-
-            # Generate our testing / validation data...
-            (
-                host_numpy_A_data,
-                host_numpy_B_data,
-                host_numpy_C_data_expected,
-            ) = _get_elemwise_add_reference_value_tensors(shape, dtype)
-
-            with hexagon_launcher.start_session() as sess:
-                # On the target device / simulator, make our Hexagon-native shared object
-                # available for use...
-                loaded_hexagon_module: tvm.runtime.module.Module = hexagon_launcher.load_module(
-                    target_dso_binary_filename, sess
-                )
-
-                # Create the target-side tensors to hold the primfunc's inputs and outputs...
-                A_data = tvm.nd.empty(shape, dtype, sess.device, mem_scope)
-                B_data = tvm.nd.empty(shape, dtype, sess.device, mem_scope)
-                C_data = tvm.nd.empty(shape, dtype, sess.device, mem_scope)
-
-                # Populate the primfunc's input tensors...
-                A_data.copyfrom(host_numpy_A_data)
-                B_data.copyfrom(host_numpy_B_data)
-
-                # Actually benchmark the primfunc...
-                timer = loaded_hexagon_module.time_evaluator(
-                    "main", sess.device, number=10, repeat=1
-                )
-                timing_result = timer(A_data, B_data, C_data)
-
-                print(f"TIMING RESULT: {timing_result}")
-                log_file.write(f"TIMING RESULT: {timing_result}\n")
-
-                # Verify that the computation actually happened, and produced the correct result.
-                result = C_data.numpy()
-
-                if dtype == "float16":
-                    # These are the closest tolerance we currently expect / require for these
-                    # kernels.  They may be changed in the future.
-                    rel_tolerance = 0.005
-                    abs_tolerance = 2.0
-                elif dtype == "int8":
-                    rel_tolerance = 0
-                    abs_tolerance = 0
-                else:
-                    raise Exception(f"Unexpected dtype: {dtype}")
-
-                # TODO: We're assuming that *any* assertion thrown by 'assert_allclose' is because
-                # the numerical differences were too large.  But ideally this code would
-                # differentiate between (a) numerical difference errors, which should simply be
-                # recorded as a failed benchmark run, vs. (b) more serious errors that should
-                # kill the overall script.
-                try:
-                    tvm.testing.assert_allclose(
-                        result, host_numpy_C_data_expected, rel_tolerance, abs_tolerance
-                    )
-                except AssertionError as e:
-                    raise NumericalAccuracyException(str(e))
-
-                _BT.record_success(timing_result, **keys_dict)
-
-        except NumericalAccuracyException as e:
-            print()
-            print(f"FAIL: Numerical accuracy error. See log file.")
-
-            log_file.write("\n")
-            log_file.write(f"FAIL: {e}\n")
-
-            _BT.record_fail(**keys_dict, comments=f"Numerical accuracy error. See log file.")
-
-        except UnsupportedException as e:
-            print()
-            print(f"SKIP: {e}")
-
-            log_file.write("\n")
-            log_file.write(f"SKIP: {e}\n")
-
-            _BT.record_skip(**keys_dict, comments=f"Unsupported configuration: {e}")
-
-
-def _get_elemwise_add_reference_value_tensors(shape: list, dtype: str):
-    """
-    Return [A:np.array, B:np.array, C:np.array]
-
-    `A`, `B`, and `C` are reference data used to exercise and validate
-    an elementwise-add kernel: C = A+B.
-
-    NOTE: These data are primarily meant for performance testing.
-    The values may be helpful in detecting correctness issues, but that's
-    a secondary consideration here.
-    """
-    assert len(shape) == 2
-
-    A = np.ndarray(shape, dtype=dtype)
-    B = np.ndarray(shape, dtype=dtype)
-
-    np_dtype = A.dtype
-
-    if np_dtype.kind in ["i", "u"]:
-        # We allow overflow for integer types because it tends to be well-behaved
-        # and well-understood...
-        min_value = np.iinfo(np_dtype).min
-        max_value = np.iinfo(np_dtype).max
-
-        next_value = min_value
-
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                A[i, j] = next_value
-                B[i, j] = next_value * 2
-                next_value += 1
-
-    elif np_dtype.kind == "f":
-        # NOTE: For simplicity, we avoid test data that that require
-        # well-defined behavior on floating-point overflow.
-        # But it may be reasonable to test that in the future.
-        min_value = np.finfo(np_dtype).min
-        max_value = np.finfo(np_dtype).max
-
-        min_input_value = min_value / 2.0 + 1
-        max_input_value = max_value / 2.0 - 2
-        delta = (max_input_value - min_input_value) / (shape[0] * shape[1])
-
-        next_value = min_input_value
-
-        for i in range(shape[0]):
-            for j in range(shape[1]):
-                A[i, j] = next_value
-                B[i, j] = next_value + 1
-                next_value += delta
-
+from tvm.tir import IndexMap
+from tvm.relay.backend import Executor, Runtime
+from tvm.contrib.hexagon.session import Session
+
+
+USE_AXIS_SEPARATOR = True
+# USE_AXIS_SEPARATOR = False
+
+
+def int8_nhwc_8h8w32c(n, h, w, c):
+    if USE_AXIS_SEPARATOR:
+        return [
+            n,
+            h // 8,
+            w // 8,
+            c // 32,
+            IndexMap.AXIS_SEPARATOR,
+            h % 8,
+            w % 8,
+            c % 32,
+        ]
     else:
-        assert False, f"Unexpected data type: {np_dtype}"
+        return [
+            n,
+            h // 8,
+            w // 8,
+            c // 32,
+            # IndexMap.AXIS_SEPARATOR,
+            h % 8,
+            w % 8,
+            c % 32,
+        ]
 
-    C = A + B
-    return [
-        A,
-        B,
-        C,
-    ]
+
+class TestMaxPool2D:
+    dtype = tvm.testing.parameter("int8")
+
+    # N = tvm.testing.parameter(1)
+    # H = tvm.testing.parameter(128)
+    # W = tvm.testing.parameter(128)
+    # C = tvm.testing.parameter(64)
+
+    # Exactly one crouton
+    N = tvm.testing.parameter(1)
+    H = tvm.testing.parameter(8)
+    W = tvm.testing.parameter(8)
+    C = tvm.testing.parameter(32)
+
+    # kernel = tvm.testing.parameter((3, 3))
+    kernel = tvm.testing.parameter((1, 1))
+
+    stride = tvm.testing.parameter((1, 1))
+    dilation = tvm.testing.parameter((1, 1))
+    padding = tvm.testing.parameter((0, 0, 0, 0))
+
+    @tvm.testing.requires_hexagon
+    def test_maxpool2d_nhwc(
+        self,
+        N,  # 1
+        H,  # 128
+        W,  # 128
+        C,  # 64
+        dtype,
+        kernel,  # (3,3)
+        stride,  # (1,1)
+        dilation,  # (1,1)
+        padding,  # (0,0,0,0)
+        hexagon_session: Session,
+    ):
+        data = te.placeholder((N, H, W, C), dtype=dtype)  # data.shape = [1, 128, 128, 64]
+        # output = topi.nn.pool2d(data, kernel, stride, dilation, padding, "max", layout="NHWC")  # output: tvm.te.tensor.Tensor ; output.shape = [1,126,126,64]
+
+        @T.prim_func
+        def func(var_placeholder: T.handle, tensor: T.Buffer[2048, "int8"]) -> None:
+            # function attr dict
+            T.func_attr({"global_symbol": "main", "tir.noalias": True})
+            placeholder = T.match_buffer(
+                var_placeholder, [1, 2048], dtype="int8", axis_separators=[1]
+            )
+            T.preflattened_buffer(
+                placeholder,
+                [1, 1, 1, 1, 8, 8, 32],
+                dtype="int8",
+                data=placeholder.data,
+                axis_separators=[4],
+            )
+            T.preflattened_buffer(tensor, [1, 8, 8, 32], dtype="int8", data=tensor.data)
+            # body
+            for i1, i2, i3 in T.grid(8, 8, 32):
+                cse_var_1: T.int32 = i1 * 256 + i2 * 32 + i3
+                tensor[cse_var_1] = T.int8(-128)
+                tensor[cse_var_1] = T.max(tensor[cse_var_1], placeholder[0, cse_var_1])
+
+        primfunc = func
+
+        # with open('out-1.txt', 'w') as f:
+        #    f.write(str(tvm.lower(tvm.te.create_schedule(output.op), [data, output,], simple_mode=True)))
+
+        # Disabled because we're copy-pasting TVMScript
+        # primfunc = te.create_prim_func([data, output])  # type(primfunc) = tvm.tir.function.PrimFunc
+
+        with open("out-2a.txt", "w") as f:
+            f.write(str(primfunc))
+        with open("out-2b.txt", "w") as f:
+            f.write(str(primfunc.script()))
+
+        sch = tir.Schedule(primfunc, debug_mask="all")  # tvm.tir.schedule.schedule.Schedule
+
+        with open("out-3a.txt", "w") as f:
+            f.write(str(sch.mod["main"]))
+        with open("out-3b.txt", "w") as f:
+            f.write(str(sch.mod["main"].script()))
+
+        # Line 74 in Chris's script
+        # Disabled while we're using TVMScript
+        # sch.transform_layout(block="tensor", buffer="placeholder", index_map=int8_nhwc_8h8w32c)
+
+        if USE_AXIS_SEPARATOR:
+            foo = "with-axis-separator"
+        else:
+            foo = "sans-axis-separator"
+
+        with open(f"out-4-{foo}.txt", "w") as f:
+            f.write(str(sch.mod["main"]))
+            f.write(str(sch.mod["main"].script()))
+
+        # with open(f'out-5-{foo}.txt', 'w') as f:
+        #    foo = tvm.lower(sch.mod, [data, output,])['main']
+        #    f.write(str(foo))
+        #    f.write(str(foo.script()))
+
+        # compute : tvm.tir.schedule.schedule.BlockRV
+        mod = sch.mod
+
+        print(mod["main"].script())
+        print(tvm.lower(mod))
+
+        # return
+
+        target_hexagon = tvm.target.hexagon("v69", link_params=True)
+        func = tvm.build(mod, target=tvm.target.Target(target_hexagon, host=target_hexagon))
+        func.save("benchmark_maxpool2d_hexagon.so")
+        mod = hexagon_session.load_module(func)
+
+        a_np = np.random.randint(low=-128, high=127, size=(N, H, W, C), dtype=np.int8)
+        ref_output = testing.poolnd_python(
+            a_np.astype("int32"),
+            kernel,
+            stride,
+            dilation,
+            padding[0:2],
+            padding[2:],
+            pool_type="max",
+            dtype="int32",
+            layout="NHWC",
+        ).astype("int8")
+        c_np = np.zeros(ref_output.shape).astype("int8")
+
+        # Line 105 in Chris' script.
+        a_transformed = a_np.reshape(N, H // 8, 8, W // 8, 8, C // 32, 32).transpose(
+            0, 1, 3, 5, 2, 4, 6
+        )
+
+        a_transformed_step1 = a_np.reshape(N, H // 8, 8, W // 8, 8, C // 32, 32)
+        a_transformed_step2 = a_transformed_step1.transpose(0, 1, 3, 5, 2, 4, 6)
+
+        # Q: What does transpose ^^^ actually do above?  Why not just reshape immediately?
+        # Does it have to do with numpy's 'reshape' when it increases the rank?
+
+        # input_shape = [1,1,1,1,8,8,32]
+        # output_shape = [1,8,8,32]
+
+        ## Create the I/O tensors...
+        # A_hexagon = tvm.nd.empty(input_shape, dtype, hexagon_session.device, 'global')
+        # C_hexagon = tvm.nd.empty(output_shape, dtype, hexagon_session.device, 'global')
+
+        # foo = tvm.nd.empty(input_shape, dtype, hexagon_session.device, 'global')
+
+        ## Use a host-side tensor to provide the initial values for the
+        ## primfunc call's input tensor...
+        # A_host = np.ndarray(input_shape, dtype=dtype)
+
+        # import random
+        # for i0 in range(input_shape[0]):
+        #    for i1 in range(input_shape[1]):
+        #        for i2 in range(input_shape[2]):
+        #            for i3 in range(input_shape[3]):
+        #                for i4 in range(input_shape[4]):
+        #                    for i5 in range(input_shape[5]):
+        #                        for i6 in range(input_shape[6]):
+        #                            A_host[i0,i1,i2,i3,i4,i5,i6] = random.randint(-128,127)
+
+        # A_hexagon.copyfrom(A_host)
+
+        breakpoint()
+
+        a_hexagon = tvm.nd.empty(
+            a_transformed.shape, dtype="int8", device=hexagon_session.device, mem_scope="global"
+        )
+        c_hexagon = tvm.nd.empty(
+            c_np.shape, dtype="int8", device=hexagon_session.device, mem_scope="global"
+        )
+
+        a_hexagon.copyfrom(a_transformed)
+
+        # a = tvm.nd.array(
+        #    a_transformed,
+        #    device=hexagon_session.device,
+        # )
+        # c = tvm.nd.array(c_np, device=hexagon_session.device)
+        # mod(a, c)
+        mod(a_hexagon, c_hexagon)
+
+        tvm.testing.assert_allclose(ref_output, c.numpy(), rtol=1e-4)
 
 
-@tvm.testing.requires_hexagon
-def test_elemwise_add(hexagon_launcher: HexagonLauncherRPC):
-    for dtype in [
-        "int8",
-        "float16",
-    ]:
-
-        for mem_scope in [
-            "global",
-            "global.vtcm",
-        ]:
-
-            # These numbers are fairly arbitrary, but they're meant to stress memory/caches to
-            # various extents.
-            for num_vectors_per_tensor in [
-                1,
-                16,
-                64,
-                512,
-                2048,
-            ]:
-
-                dtype_bits = tvm._ffi.runtime_ctypes.DataType(dtype).bits
-                assert dtype_bits % 8 == 0
-                dtype_bytes = dtype_bits // 8
-
-                elem_per_hvx_vector = HVX_VECTOR_BYTES // dtype_bytes
-
-                shape = [
-                    num_vectors_per_tensor,
-                    elem_per_hvx_vector,
-                ]
-
-                print()
-                _benchmark_hexagon_elementwise_add_kernel(hexagon_launcher, shape, dtype, mem_scope)
-
-    print("-" * 80)
-    print(f"OUTPUT DIRECTORY: {_HOST_OUTPUT_DIR}")
-    print("-" * 80)
-    print()
-
-    tabular_output_filename = os.path.join(_HOST_OUTPUT_DIR, "benchmark-results.csv")
-    with open(tabular_output_filename, "w") as csv_file:
-        _BT.print_csv(csv_file, _CSV_COLUMN_ORDER)
-
-    print(f"BENCHMARK RESULTS FILE: {tabular_output_filename}")
-
-    _BT.print_csv(sys.stdout, _CSV_COLUMN_ORDER)
-
-    if _BT.has_fail() > 0:
-        pytest.fail("At least one benchmark configuration failed", pytrace=False)
+if __name__ == "__main__":
+    sys.exit(pytest.main(sys.argv))

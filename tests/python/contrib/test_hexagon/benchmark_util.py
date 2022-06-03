@@ -24,11 +24,13 @@ class UnsupportedException(Exception):
     currently be unsupported.  The Exception message may provide more detail.
     """
 
+
 class NumericalAccuracyException(Exception):
     """
     Indicates that the benchmarking configuration appeared to run successfully,
     but the output data didn't have the expected accuracy.
     """
+
 
 class BenchmarksTable:
     """
