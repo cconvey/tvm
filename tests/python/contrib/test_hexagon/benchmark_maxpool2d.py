@@ -27,33 +27,24 @@ from tvm.tir import IndexMap
 from tvm.relay.backend import Executor, Runtime
 from tvm.contrib.hexagon.session import Session
 
+from .infrastructure import allocate_hexagon_array, get_packed_shape
 
-USE_AXIS_SEPARATOR = True
-#USE_AXIS_SEPARATOR = False
+#def get_blocked_shape_int8_nhwc_8h8w32c(n, h, w, c, include_axis_sep:bool):
+#    shape = [
+#        n,
+#        h // 8,
+#        w // 8,
+#        c // 32,
+#        h % 8,
+#        w % 8,
+#        c % 32,
+#    ]
+#
+#    if include_axis_sep:
+#        shape = shape[:-3] + [IndexMap.AXIS_SEPARATOR] + shape[-3:]
+#
+#    return shape
 
-def int8_nhwc_8h8w32c(n, h, w, c):
-    if USE_AXIS_SEPARATOR:
-        return [
-            n,
-            h // 8,
-            w // 8,
-            c // 32,
-            IndexMap.AXIS_SEPARATOR,
-            h % 8,
-            w % 8,
-            c % 32,
-        ]
-    else:
-        return [
-            n,
-            h // 8,
-            w // 8,
-            c // 32,
-            #IndexMap.AXIS_SEPARATOR,
-            h % 8,
-            w % 8,
-            c % 32,
-        ]
 
 class TestMaxPool2D:
     dtype = tvm.testing.parameter("int8")
@@ -107,9 +98,6 @@ class TestMaxPool2D:
                 tensor[cse_var_1] = T.max(tensor[cse_var_1], placeholder[0, cse_var_1])
         primfunc = func
 
-        #with open('out-1.txt', 'w') as f:
-        #    f.write(str(tvm.lower(tvm.te.create_schedule(output.op), [data, output,], simple_mode=True)))
-
         # Disabled because we're copy-pasting TVMScript
         #primfunc = te.create_prim_func([data, output])  # type(primfunc) = tvm.tir.function.PrimFunc
 
@@ -129,10 +117,7 @@ class TestMaxPool2D:
         # Disabled while we're using TVMScript
         # sch.transform_layout(block="tensor", buffer="placeholder", index_map=int8_nhwc_8h8w32c)
 
-        if USE_AXIS_SEPARATOR:
-            foo = 'with-axis-separator'
-        else:
-            foo = 'sans-axis-separator'
+        foo = 'with-axis-separator'
 
         with open(f'out-4-{foo}.txt', 'w') as f:
             f.write(str(sch.mod['main']))
@@ -173,7 +158,7 @@ class TestMaxPool2D:
 	# Do we actually need c_np?
         c_np = np.zeros(ref_output.shape).astype("int8")
 
-	breakpoint()
+	#breakpoint()
 
         # Line 105 in Chris' script.
         a_transformed = a_np.reshape(N, H // 8, 8, W // 8, 8, C // 32, 32).transpose(
@@ -212,9 +197,11 @@ class TestMaxPool2D:
         #                        for i6 in range(input_shape[6]):
         #                            A_host[i0,i1,i2,i3,i4,i5,i6] = random.randint(-128,127)
 
+        packed_input_shape = get_packed_shape([N,H,W,C])
+
         a_hexagon = allocate_hexagon_array(
             hexagon_session.device,
-            tensor_shape=input_shape_7d,
+            tensor_shape=get_packed_shape([N,H,W,C]),
             axis_separators=[4],
             dtype="int8",
             mem_scope="global.vtcm",
@@ -222,7 +209,7 @@ class TestMaxPool2D:
 
         c_hexagon = allocate_hexagon_array(
             hexagon_session.device,
-            tensor_shape=output_shape_4d,
+            tensor_shape=[N,H,W,C],
             axis_separators=[],
             dtype="int8",
             mem_scope="global.vtcm",
@@ -230,12 +217,7 @@ class TestMaxPool2D:
 
         a_hexagon.copyfrom(a_transformed)
 
-        #a = tvm.nd.array(
-        #    a_transformed,
-        #    device=hexagon_session.device,
-        #)
-        #c = tvm.nd.array(c_np, device=hexagon_session.device)
-        #mod(a, c)
+        #breakpoint()
         mod(a_hexagon, c_hexagon)
 
         tvm.testing.assert_allclose(ref_output, c_hexagon.numpy(), rtol=1e-4)
