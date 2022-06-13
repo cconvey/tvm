@@ -18,6 +18,7 @@
 import sys
 import pytest
 import numpy as np
+from typing import List
 
 import tvm.testing
 from tvm import te, topi, tir
@@ -26,14 +27,127 @@ from tvm.script import tir as T
 from tvm.tir import IndexMap
 from tvm.relay.backend import Executor, Runtime
 from tvm.contrib.hexagon.session import Session
+from .infrastructure import allocate_hexagon_array
+
+def div_rounded_up(numerator:int, divisor:int) -> int:
+    assert numerator >= 0
+    assert divisor > 0
+
+    if numerator % divisor == 0:
+        return numerator // divisor
+    else:
+        return (numerator // divisor) + 1
+
+class tensor_blocking_conversion:
+    """
+    Convenience class providing various artifacts
+    needed for mapping between unblocked and blocked
+    tensor layouts.
+    """
 
 
-USE_AXIS_SEPARATOR = True
-#USE_AXIS_SEPARATOR = False
+    #  [ N, H,      W,      C                            ]
+    #  [ N, ⎡H/b0⎤, b0,     ⎡W/b1⎤,       b1, ⎡C/b2⎤, b2 ]
+    #  [ N, ⎡H/b0⎤, ⎡W/b1⎤, ⎡C/b2⎤,       b0, b1    , b2 ]
+    #  [ N, ⎡H/b0⎤, ⎡W/b1⎤, ⎡C/b2⎤ ] --> [b0, b1    , b2 ]
 
-def int8_nhwc_8h8w32c(n, h, w, c):
-    if USE_AXIS_SEPARATOR:
-        return [
+
+
+    # We consider the following forms of the tensor and its buffer.
+    #
+    # For the sake of discussion, assume:
+    # - the original shape is [N, H, W, C]
+    # - the
+
+    the desired *block* shape is [b0, b1, b2].
+    #
+    # Also
+
+
+    # form 1: N H         W         C
+    # form 2: N H'=⎡H÷b0⎤ h=b0      W'=⎡W÷b1⎤ w=b1 C'=⎡C÷b1⎤ c=b2
+    # form 3: N H'=⎡H÷b0⎤ W'=⎡W÷b1⎤ C'=⎡C÷b1⎤ h=b0 w=b1      c=b2
+
+    # form 3: N H' W' C' h w c
+    # form 4:
+
+    # N, n, H, h, W, w, C
+
+
+    def __init__(self, unblocked_shape:List[int], blocked_layout:str, dtype:str):
+        """
+        An string indicating the desired tensor layout, e.g. 'NHWC_8h8w32c'.
+        All aspects of the blocking conversion are deduced from this string.
+        """
+        self._blocked_layout_str = blocked_layout
+        self._dtype_str = dtype
+
+        if blocked_layout == 'NHWC_8h8w32c':
+            unblocked_labels = ['N', 'H', 'W', 'C',]
+            blocked_labels = ['N', 'H', 'W', 'C', 'n', 'h', 'w', 'c',]
+
+            self._unblocked_labeled_shape = dict(zip(
+
+                    'N':unblocked_shape[0],
+
+        # TODO: automate this logic
+        self._unblocked_labeled_shape = {
+                'N':
+
+        dict(zip(['N', 'H', 'W', 'C'], unblocked_shape))
+        self._unblocked_numeric_shape = list(self._unblocked_labeled_shape.values())
+
+        block_
+
+        self._blocked_labeled_shape = {
+                self._unblocked_labeled_shape[
+                }
+        self._unblocked_shape = unblocked_shape
+
+        self._blocked_labeled_shape
+
+
+        self._unblocked_named_shape = {
+                'N':unblocked_shape[0],
+
+
+            self._blocked_shape = {
+                    'N':
+                    }
+            self._unblocked_shape = unblocked_shape
+            self._unblocked_dim_map =
+
+
+            (N_unblocked, H_unblocked, W,C,) = unblocked_shape
+            self._unblocked_shape = [
+
+            self._blocked_shape_with_axissep = [
+                    n,
+                    h // 8,
+                    w // 8,
+                    c // 32,
+                    IndexMap.AXIS_SEPARATOR,
+                    h % 8,
+                    w % 8,
+                    c % 32,
+                    ]
+
+            self_axis_seperators = [4]
+
+            self._blocked_shape_sans_axissep = [d for d in self._blocked_shape_with_axissep if d != IndexMap.AXIS_SEPARATOR ]
+
+            self._blocked_
+
+        # Line 105 in Chris' script.
+        a_transformed = a_np.reshape(N, H // 8, 8, W // 8, 8, C // 32, 32).transpose(
+            0, 1, 3, 5, 2, 4, 6
+        )
+
+
+
+
+def int8_nhwc_axissep_8h8w32c(n, h, w, c):
+    return [
             n,
             h // 8,
             w // 8,
@@ -42,18 +156,7 @@ def int8_nhwc_8h8w32c(n, h, w, c):
             h % 8,
             w % 8,
             c % 32,
-        ]
-    else:
-        return [
-            n,
-            h // 8,
-            w // 8,
-            c // 32,
-            #IndexMap.AXIS_SEPARATOR,
-            h % 8,
-            w % 8,
-            c % 32,
-        ]
+            ]
 
 class TestMaxPool2D:
     dtype = tvm.testing.parameter("int8")
@@ -90,6 +193,12 @@ class TestMaxPool2D:
         padding, # (0,0,0,0)
         hexagon_session: Session,
         ):
+
+        breakpoint()
+
+        input_shape_7d_with_axissep = int8_nhwc_axissep_8h8w32c(N, H, W, C)
+        input_shape_7d_sans_axissep = shape_sans_axissep(input_shape_7d_with_axissep)
+
         data = te.placeholder((N, H, W, C), dtype=dtype) # data.shape = [1, 128, 128, 64]
         #output = topi.nn.pool2d(data, kernel, stride, dilation, padding, "max", layout="NHWC")  # output: tvm.te.tensor.Tensor ; output.shape = [1,126,126,64]
 
@@ -129,14 +238,14 @@ class TestMaxPool2D:
         # Disabled while we're using TVMScript
         # sch.transform_layout(block="tensor", buffer="placeholder", index_map=int8_nhwc_8h8w32c)
 
-        if USE_AXIS_SEPARATOR:
-            foo = 'with-axis-separator'
-        else:
-            foo = 'sans-axis-separator'
+        #if USE_AXIS_SEPARATOR:
+        #    foo = 'with-axis-separator'
+        #else:
+        #    foo = 'sans-axis-separator'
 
-        with open(f'out-4-{foo}.txt', 'w') as f:
-            f.write(str(sch.mod['main']))
-            f.write(str(sch.mod['main'].script()))
+        #with open(f'out-4-{foo}.txt', 'w') as f:
+        #    f.write(str(sch.mod['main']))
+        #    f.write(str(sch.mod['main'].script()))
 
         #with open(f'out-5-{foo}.txt', 'w') as f:
         #    foo = tvm.lower(sch.mod, [data, output,])['main']
@@ -172,8 +281,6 @@ class TestMaxPool2D:
 
 	# Do we actually need c_np?
         c_np = np.zeros(ref_output.shape).astype("int8")
-
-	breakpoint()
 
         # Line 105 in Chris' script.
         a_transformed = a_np.reshape(N, H // 8, 8, W // 8, 8, C // 32, 32).transpose(
@@ -229,6 +336,7 @@ class TestMaxPool2D:
         )
 
         a_hexagon.copyfrom(a_transformed)
+        #breakpoint()
 
         #a = tvm.nd.array(
         #    a_transformed,
