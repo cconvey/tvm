@@ -27,7 +27,6 @@ from tvm.tir import IndexMap
 from tvm.relay.backend import Executor, Runtime
 from tvm.contrib.hexagon.session import Session
 
-
 from .infrastructure import allocate_hexagon_array
 
 

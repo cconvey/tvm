@@ -29,22 +29,20 @@ from tvm.contrib.hexagon.session import Session
 
 from .infrastructure import allocate_hexagon_array, get_packed_shape
 
-#def get_blocked_shape_int8_nhwc_8h8w32c(n, h, w, c, include_axis_sep:bool):
-#    shape = [
-#        n,
-#        h // 8,
-#        w // 8,
-#        c // 32,
-#        h % 8,
-#        w % 8,
-#        c % 32,
-#    ]
-#
-#    if include_axis_sep:
-#        shape = shape[:-3] + [IndexMap.AXIS_SEPARATOR] + shape[-3:]
-#
-#    return shape
+import time
 
+def int8_nhwc_8h8w32c(n, h, w, c):
+    shape = [
+        n,
+        h // 8,
+        w // 8,
+        c // 32,
+        h % 8,
+        w % 8,
+        c % 32,
+    ]
+
+    return shape
 
 class TestMaxPool2D:
     dtype = tvm.testing.parameter("int8")
@@ -82,24 +80,24 @@ class TestMaxPool2D:
         hexagon_session: Session,
         ):
         data = te.placeholder((N, H, W, C), dtype=dtype) # data.shape = [1, 128, 128, 64]
-        #output = topi.nn.pool2d(data, kernel, stride, dilation, padding, "max", layout="NHWC")  # output: tvm.te.tensor.Tensor ; output.shape = [1,126,126,64]
+        output = topi.nn.pool2d(data, kernel, stride, dilation, padding, "max", layout="NHWC")  # output: tvm.te.tensor.Tensor ; output.shape = [1,126,126,64]
 
-        @T.prim_func
-        def func(var_placeholder: T.handle, tensor: T.Buffer[2048, "int8"]) -> None:
-            # function attr dict
-            T.func_attr({"global_symbol": "main", "tir.noalias": True})
-            placeholder = T.match_buffer(var_placeholder, [1, 2048], dtype="int8", axis_separators=[1])
-            T.preflattened_buffer(placeholder, [1, 1, 1, 1, 8, 8, 32], dtype="int8", data=placeholder.data, axis_separators=[4])
-            T.preflattened_buffer(tensor, [1, 8, 8, 32], dtype="int8", data=tensor.data)
-            # body
-            for i1, i2, i3 in T.grid(8, 8, 32):
-                cse_var_1: T.int32 = i1 * 256 + i2 * 32 + i3
-                tensor[cse_var_1] = T.int8(-128)
-                tensor[cse_var_1] = T.max(tensor[cse_var_1], placeholder[0, cse_var_1])
-        primfunc = func
+        #@T.prim_func
+        #def func(var_placeholder: T.handle, tensor: T.Buffer[2048, "int8"]) -> None:
+        #    # function attr dict
+        #    T.func_attr({"global_symbol": "main", "tir.noalias": True})
+        #    placeholder = T.match_buffer(var_placeholder, [1, 2048], dtype="int8", axis_separators=[1])
+        #    T.preflattened_buffer(placeholder, [1, 1, 1, 1, 8, 8, 32], dtype="int8", data=placeholder.data, axis_separators=[4])
+        #    T.preflattened_buffer(tensor, [1, 8, 8, 32], dtype="int8", data=tensor.data)
+        #    # body
+        #    for i1, i2, i3 in T.grid(8, 8, 32):
+        #        cse_var_1: T.int32 = i1 * 256 + i2 * 32 + i3
+        #        tensor[cse_var_1] = T.int8(-128)
+        #        tensor[cse_var_1] = T.max(tensor[cse_var_1], placeholder[0, cse_var_1])
+        #primfunc = func
 
         # Disabled because we're copy-pasting TVMScript
-        #primfunc = te.create_prim_func([data, output])  # type(primfunc) = tvm.tir.function.PrimFunc
+        primfunc = te.create_prim_func([data, output])  # type(primfunc) = tvm.tir.function.PrimFunc
 
         with open('out-2a.txt', 'w') as f:
             f.write(str(primfunc))
@@ -115,7 +113,7 @@ class TestMaxPool2D:
 
         # Line 74 in Chris's script
         # Disabled while we're using TVMScript
-        # sch.transform_layout(block="tensor", buffer="placeholder", index_map=int8_nhwc_8h8w32c)
+        sch.transform_layout(block="tensor", buffer="placeholder", index_map=int8_nhwc_8h8w32c)
 
         foo = 'with-axis-separator'
 
@@ -123,10 +121,10 @@ class TestMaxPool2D:
             f.write(str(sch.mod['main']))
             f.write(str(sch.mod['main'].script()))
 
-        #with open(f'out-5-{foo}.txt', 'w') as f:
-        #    foo = tvm.lower(sch.mod, [data, output,])['main']
-        #    f.write(str(foo))
-        #    f.write(str(foo.script()))
+        with open(f'out-5-{foo}.txt', 'w') as f:
+            foo = tvm.lower(sch.mod, [data, output,])['main']
+            f.write(str(foo))
+            f.write(str(foo.script()))
 
 
         # compute : tvm.tir.schedule.schedule.BlockRV
@@ -143,8 +141,18 @@ class TestMaxPool2D:
         mod = hexagon_session.load_module(func)
 
         a_np = np.random.randint(low=-128, high=127, size=(N, H, W, C), dtype=np.int8)
+
+        # Random is overrated while debugging...
+        for n in range(N):
+            for h in range(H):
+                for w in range(W):
+                    for c in range(C):
+                        a_np[n,h,w,c] = 42
+
+
         ref_output = testing.poolnd_python(
-            a_np.astype("int32"),
+            #a_np.astype("int32"),
+            a_np.astype("int8"), # ????
             kernel,
             stride,
             dilation,
@@ -155,8 +163,6 @@ class TestMaxPool2D:
             layout="NHWC",
         ).astype("int8")
 
-	# Do we actually need c_np?
-        c_np = np.zeros(ref_output.shape).astype("int8")
 
 	#breakpoint()
 
@@ -165,37 +171,8 @@ class TestMaxPool2D:
             0, 1, 3, 5, 2, 4, 6
         )
 
-        #a_transformed_step1 =  a_np.reshape(N, H // 8, 8, W // 8, 8, C // 32, 32)
-        #a_transformed_step2 = a_transformed_step1.transpose(
-        #    0, 1, 3, 5, 2, 4, 6
-        #)
-
-        # Q: What does transpose ^^^ actually do above?  Why not just reshape immediately?
-        # Does it have to do with numpy's 'reshape' when it increases the rank?
-
         #input_shape = [1,1,1,1,8,8,32]
         #output_shape = [1,8,8,32]
-
-        ## Create the I/O tensors...
-        #A_hexagon = tvm.nd.empty(input_shape, dtype, hexagon_session.device, 'global')
-        #C_hexagon = tvm.nd.empty(output_shape, dtype, hexagon_session.device, 'global')
-
-        #foo = tvm.nd.empty(input_shape, dtype, hexagon_session.device, 'global')
-
-
-        ## Use a host-side tensor to provide the initial values for the
-        ## primfunc call's input tensor...
-        #A_host = np.ndarray(input_shape, dtype=dtype)
-
-        #import random
-        #for i0 in range(input_shape[0]):
-        #    for i1 in range(input_shape[1]):
-        #        for i2 in range(input_shape[2]):
-        #            for i3 in range(input_shape[3]):
-        #                for i4 in range(input_shape[4]):
-        #                    for i5 in range(input_shape[5]):
-        #                        for i6 in range(input_shape[6]):
-        #                            A_host[i0,i1,i2,i3,i4,i5,i6] = random.randint(-128,127)
 
         packed_input_shape = get_packed_shape([N,H,W,C])
 
@@ -215,9 +192,20 @@ class TestMaxPool2D:
             mem_scope="global.vtcm",
         )
 
+        #breakpoint()
+
+        print('AAAAA: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
+
         a_hexagon.copyfrom(a_transformed)
 
-        #breakpoint()
+        for i in range(1,11):
+            time.sleep(5)
+            print('BBBBB {}: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(i, a_hexagon.numpy()[0,0,0,0,0,0,0]))
+
+        # This is just to help with debugging...
+        c_np = np.zeros(ref_output.shape).astype("int8")
+        c_hexagon.copyfrom(c_np)
+
         mod(a_hexagon, c_hexagon)
 
         tvm.testing.assert_allclose(ref_output, c_hexagon.numpy(), rtol=1e-4)

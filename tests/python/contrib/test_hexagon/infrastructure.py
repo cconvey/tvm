@@ -20,7 +20,7 @@
 import tvm
 from tvm import te
 import numpy
-
+from typing import List, Union
 
 def allocate_hexagon_array(
     dev, tensor_shape=None, dtype=None, data=None, axis_separators=None, mem_scope=None
@@ -55,10 +55,10 @@ def allocate_hexagon_array(
 
     return arr._create_view(tensor_shape)
 
-
 def ceildiv(o, d):
     assert o >= 0
     assert d >= 0
+
     return tvm.tir.floordiv(o + d - 1, d)
 
 
@@ -73,8 +73,8 @@ def get_filter_block_shape():
 
 
 # input: locgical shape in nhwc layout
-# output:  physical packed shape in nhw8h8w32c layout
-def get_packed_shape(logical_shape_nhwc):
+# output: the physical packed shape in nhw8h8w32c layout
+def get_packed_shape(logical_shape_nhwc) -> List[Union[int, tvm.tir.expr.IntImm]] :
     assert len(logical_shape_nhwc) == 4
     physical_shape_nhwc8h8w32c = [logical_shape_nhwc[0]]
     block_shape = get_block_shape()
