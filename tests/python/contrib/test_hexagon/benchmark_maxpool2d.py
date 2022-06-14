@@ -37,6 +37,7 @@ def int8_nhwc_8h8w32c(n, h, w, c):
         h // 8,
         w // 8,
         c // 32,
+        te.AXIS_SEPARATOR,
         h % 8,
         w % 8,
         c % 32,
@@ -123,15 +124,37 @@ class TestMaxPool2D:
 
         with open(f'out-5-{foo}.txt', 'w') as f:
             foo = tvm.lower(sch.mod, [data, output,])['main']
-            breakpoint()
             f.write(str(foo))
             f.write(str(foo.script()))
-
 
         # compute : tvm.tir.schedule.schedule.BlockRV
         mod = sch.mod
 
         print(mod["main"].script())
+
+        #@T.prim_func
+        #def func(var_placeholder: T.handle, tensor: T.Buffer[2048, "int8"]) -> None:
+        #    # function attr dict
+        #    T.func_attr({"global_symbol": "main", "tir.noalias": True})
+        #    placeholder = T.match_buffer(var_placeholder, [1, 2048], dtype="int8", axis_separators=[1])
+        #    T.preflattened_buffer(placeholder, [1, 1, 1, 1, 8, 8, 32], dtype="int8", data=placeholder.data, axis_separators=[4])
+        #    T.preflattened_buffer(tensor, [1, 8, 8, 32], dtype="int8", data=tensor.data)
+        #    # body
+        #    for i1, i2, i3 in T.grid(8, 8, 32):
+        #        cse_var_1: T.int32 = i1 * 256 + i2 * 32 + i3
+        #        tensor[cse_var_1] = T.int8(-128)
+        #        tensor[cse_var_1] = T.max(tensor[cse_var_1], placeholder[0, cse_var_1])
+
+        #        #tensor[cse_var_1] = T.int8(101)
+        #        #tensor[cse_var_1] = placeholder[0, cse_var_1]
+        #        #tensor[cse_var_1] = T.max(T.int8(13), T.int8(17))
+        #        #tensor[cse_var_1] = T.max(T.int8(-128), T.int8(11))
+        #        #tensor[cse_var_1] = T.max(T.int8(11), T.int8(-128))
+        #        #tensor[cse_var_1] = T.max(tensor[cse_var_1], placeholder[0, cse_var_1])
+
+        #mod = func
+
+        #breakpoint()
         print(tvm.lower(mod))
 
         #return
@@ -139,7 +162,7 @@ class TestMaxPool2D:
         target_hexagon = tvm.target.hexagon("v69", link_params=True)
         func = tvm.build(mod, target=tvm.target.Target(target_hexagon, host=target_hexagon))
         func.save('benchmark_maxpool2d_hexagon.so')
-        mod = hexagon_session.load_module(func)
+        hexagon_mod = hexagon_session.load_module(func)
 
         a_np = np.random.randint(low=-128, high=127, size=(N, H, W, C), dtype=np.int8)
         # Random is overrated while debugging...
@@ -203,16 +226,15 @@ class TestMaxPool2D:
         print('D: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
         print('D: c_hexagon.numpy()[0,5,5,0]={}'.format(c_hexagon.numpy()[0,5,5,0]))
 
-        mod(a_hexagon, c_hexagon)
+        #breakpoint()
 
-        breakpoint()
+        hexagon_mod(a_hexagon, c_hexagon)
 
         print('E: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
         print('E: c_hexagon.numpy()[0,5,5,0]={}'.format(c_hexagon.numpy()[0,5,5,0]))
-        return
+        #return
 
         tvm.testing.assert_allclose(ref_output, c_hexagon.numpy(), rtol=1e-4)
-
 
 if __name__ == "__main__":
     sys.exit(pytest.main(sys.argv))
