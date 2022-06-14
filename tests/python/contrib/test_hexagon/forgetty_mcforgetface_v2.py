@@ -82,63 +82,49 @@ class TestMaxPool2D:
         data = te.placeholder((N, H, W, C), dtype=dtype) # data.shape = [1, 128, 128, 64]
         output = topi.nn.pool2d(data, kernel, stride, dilation, padding, "max", layout="NHWC")  # output: tvm.te.tensor.Tensor ; output.shape = [1,126,126,64]
 
-        #@T.prim_func
-        #def func(var_placeholder: T.handle, tensor: T.Buffer[2048, "int8"]) -> None:
-        #    # function attr dict
-        #    T.func_attr({"global_symbol": "main", "tir.noalias": True})
-        #    placeholder = T.match_buffer(var_placeholder, [1, 2048], dtype="int8", axis_separators=[1])
-        #    T.preflattened_buffer(placeholder, [1, 1, 1, 1, 8, 8, 32], dtype="int8", data=placeholder.data, axis_separators=[4])
-        #    T.preflattened_buffer(tensor, [1, 8, 8, 32], dtype="int8", data=tensor.data)
-        #    # body
-        #    for i1, i2, i3 in T.grid(8, 8, 32):
-        #        cse_var_1: T.int32 = i1 * 256 + i2 * 32 + i3
-        #        tensor[cse_var_1] = T.int8(-128)
-        #        tensor[cse_var_1] = T.max(tensor[cse_var_1], placeholder[0, cse_var_1])
-        #primfunc = func
-
         # Disabled because we're copy-pasting TVMScript
-        primfunc = te.create_prim_func([data, output])  # type(primfunc) = tvm.tir.function.PrimFunc
+        #primfunc = te.create_prim_func([data, output])  # type(primfunc) = tvm.tir.function.PrimFunc
 
-        with open('out-2a.txt', 'w') as f:
-            f.write(str(primfunc))
-        with open('out-2b.txt', 'w') as f:
-            f.write(str(primfunc.script()))
+        #with open('out-2a.txt', 'w') as f:
+        #    f.write(str(primfunc))
+        #with open('out-2b.txt', 'w') as f:
+        #    f.write(str(primfunc.script()))
 
-        sch = tir.Schedule(primfunc, debug_mask="all") # tvm.tir.schedule.schedule.Schedule
+        #sch = tir.Schedule(primfunc, debug_mask="all") # tvm.tir.schedule.schedule.Schedule
 
-        with open('out-3a.txt', 'w') as f:
-            f.write(str(sch.mod['main']))
-        with open('out-3b.txt', 'w') as f:
-            f.write(str(sch.mod['main'].script()))
+        #with open('out-3a.txt', 'w') as f:
+        #    f.write(str(sch.mod['main']))
+        #with open('out-3b.txt', 'w') as f:
+        #    f.write(str(sch.mod['main'].script()))
 
-        # Line 74 in Chris's script
-        # Disabled while we're using TVMScript
-        sch.transform_layout(block="tensor", buffer="placeholder", index_map=int8_nhwc_8h8w32c)
+        ## Line 74 in Chris's script
+        ## Disabled while we're using TVMScript
+        #sch.transform_layout(block="tensor", buffer="placeholder", index_map=int8_nhwc_8h8w32c)
 
-        foo = 'with-axis-separator'
+        #foo = 'with-axis-separator'
 
-        with open(f'out-4-{foo}.txt', 'w') as f:
-            f.write(str(sch.mod['main']))
-            f.write(str(sch.mod['main'].script()))
+        #with open(f'out-4-{foo}.txt', 'w') as f:
+        #    f.write(str(sch.mod['main']))
+        #    f.write(str(sch.mod['main'].script()))
 
-        with open(f'out-5-{foo}.txt', 'w') as f:
-            foo = tvm.lower(sch.mod, [data, output,])['main']
-            f.write(str(foo))
-            f.write(str(foo.script()))
+        #with open(f'out-5-{foo}.txt', 'w') as f:
+        #    foo = tvm.lower(sch.mod, [data, output,])['main']
+        #    f.write(str(foo))
+        #    f.write(str(foo.script()))
 
 
-        # compute : tvm.tir.schedule.schedule.BlockRV
-        mod = sch.mod
+        ## compute : tvm.tir.schedule.schedule.BlockRV
+        #mod = sch.mod
 
-        print(mod["main"].script())
-        print(tvm.lower(mod))
+        #print(mod["main"].script())
+        #print(tvm.lower(mod))
 
         #return
 
-        target_hexagon = tvm.target.hexagon("v69", link_params=True)
-        func = tvm.build(mod, target=tvm.target.Target(target_hexagon, host=target_hexagon))
-        func.save('benchmark_maxpool2d_hexagon.so')
-        mod = hexagon_session.load_module(func)
+        #target_hexagon = tvm.target.hexagon("v69", link_params=True)
+        #func = tvm.build(mod, target=tvm.target.Target(target_hexagon, host=target_hexagon))
+        #func.save('benchmark_maxpool2d_hexagon.so')
+        #mod = hexagon_session.load_module(func)
 
         a_np = np.random.randint(low=-128, high=127, size=(N, H, W, C), dtype=np.int8)
 

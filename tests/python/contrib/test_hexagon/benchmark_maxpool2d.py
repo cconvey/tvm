@@ -99,17 +99,17 @@ class TestMaxPool2D:
         # Disabled because we're copy-pasting TVMScript
         primfunc = te.create_prim_func([data, output])  # type(primfunc) = tvm.tir.function.PrimFunc
 
-        with open('out-2a.txt', 'w') as f:
-            f.write(str(primfunc))
-        with open('out-2b.txt', 'w') as f:
-            f.write(str(primfunc.script()))
+        #with open('out-2a.txt', 'w') as f:
+        #    f.write(str(primfunc))
+        #with open('out-2b.txt', 'w') as f:
+        #    f.write(str(primfunc.script()))
 
         sch = tir.Schedule(primfunc, debug_mask="all") # tvm.tir.schedule.schedule.Schedule
 
-        with open('out-3a.txt', 'w') as f:
-            f.write(str(sch.mod['main']))
-        with open('out-3b.txt', 'w') as f:
-            f.write(str(sch.mod['main'].script()))
+        #with open('out-3a.txt', 'w') as f:
+        #    f.write(str(sch.mod['main']))
+        #with open('out-3b.txt', 'w') as f:
+        #    f.write(str(sch.mod['main'].script()))
 
         # Line 74 in Chris's script
         # Disabled while we're using TVMScript
@@ -117,12 +117,13 @@ class TestMaxPool2D:
 
         foo = 'with-axis-separator'
 
-        with open(f'out-4-{foo}.txt', 'w') as f:
-            f.write(str(sch.mod['main']))
-            f.write(str(sch.mod['main'].script()))
+        #with open(f'out-4-{foo}.txt', 'w') as f:
+        #    f.write(str(sch.mod['main']))
+        #    f.write(str(sch.mod['main'].script()))
 
         with open(f'out-5-{foo}.txt', 'w') as f:
             foo = tvm.lower(sch.mod, [data, output,])['main']
+            breakpoint()
             f.write(str(foo))
             f.write(str(foo.script()))
 
@@ -141,18 +142,11 @@ class TestMaxPool2D:
         mod = hexagon_session.load_module(func)
 
         a_np = np.random.randint(low=-128, high=127, size=(N, H, W, C), dtype=np.int8)
-
         # Random is overrated while debugging...
-        for n in range(N):
-            for h in range(H):
-                for w in range(W):
-                    for c in range(C):
-                        a_np[n,h,w,c] = 42
-
+        a_np[:] = 42
 
         ref_output = testing.poolnd_python(
-            #a_np.astype("int32"),
-            a_np.astype("int8"), # ????
+            a_np.astype("int32"),
             kernel,
             stride,
             dilation,
@@ -163,16 +157,10 @@ class TestMaxPool2D:
             layout="NHWC",
         ).astype("int8")
 
-
-	#breakpoint()
-
         # Line 105 in Chris' script.
         a_transformed = a_np.reshape(N, H // 8, 8, W // 8, 8, C // 32, 32).transpose(
             0, 1, 3, 5, 2, 4, 6
         )
-
-        #input_shape = [1,1,1,1,8,8,32]
-        #output_shape = [1,8,8,32]
 
         packed_input_shape = get_packed_shape([N,H,W,C])
 
@@ -194,19 +182,34 @@ class TestMaxPool2D:
 
         #breakpoint()
 
-        print('AAAAA: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
+        print('A: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
 
         a_hexagon.copyfrom(a_transformed)
 
-        for i in range(1,11):
-            time.sleep(5)
-            print('BBBBB {}: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(i, a_hexagon.numpy()[0,0,0,0,0,0,0]))
+        print('B: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
+
+        assert a_hexagon.numpy()[0,0,0,0,0,0,0] == 42
 
         # This is just to help with debugging...
         c_np = np.zeros(ref_output.shape).astype("int8")
+        c_np = np.ndarray(ref_output.shape, dtype="int8")
+        c_np[:] = 31
+
+        print('C: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
+        print('C: c_np[0,5,5,0]={}'.format(c_np[0,5,5,0]))
+
         c_hexagon.copyfrom(c_np)
 
+        print('D: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
+        print('D: c_hexagon.numpy()[0,5,5,0]={}'.format(c_hexagon.numpy()[0,5,5,0]))
+
         mod(a_hexagon, c_hexagon)
+
+        breakpoint()
+
+        print('E: a_hexagon.numpy()[0,0,0,0,0,0,0]={}'.format(a_hexagon.numpy()[0,0,0,0,0,0,0]))
+        print('E: c_hexagon.numpy()[0,5,5,0]={}'.format(c_hexagon.numpy()[0,5,5,0]))
+        return
 
         tvm.testing.assert_allclose(ref_output, c_hexagon.numpy(), rtol=1e-4)
 
