@@ -47,6 +47,19 @@ def allocate_hexagon_array(
     if axis_separators is None:
         axis_separators = []
 
+    # We're abusing the notion of "shape" here: it no longer means the logical shape of the
+    # tensor, but rather the number of memory-allocation tiers.
+    # So the new shape's rank will be (# of axis separators + 1).
+    #
+    # The Hexagon runtime will assume that this flatening has already occurred, and will
+    # therefore interpret the tensor's rank as an indicating of the # of allocation tiers.
+    #
+    # Note that when the # of axis separators == 1:
+    # - This host-side code still creates single memory allocation in which every
+    #   element is actual tensor content.
+    # - The Hexagon runtime code will need to allocate/populate member in a true
+    #   2D format, i.e., it will need to add a top-tier buffer holding pointers into
+    #   the bottom-tier tensor contents.
     boundaries = [0, *axis_separators, len(tensor_shape)]
     physical_shape = [
         numpy.prod(tensor_shape[dim_i:dim_f])

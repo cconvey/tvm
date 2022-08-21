@@ -57,34 +57,26 @@ void* HexagonDeviceAPI::AllocDataSpace(Device dev, int ndim, const int64_t* shap
   CHECK(shape) << "shape array is null";
   CHECK(IsValidDevice(dev)) << "dev.device_type: " << dev.device_type;
 
-  if (!mem_scope.defined() || mem_scope.value() == "global") {
-    return DeviceAPI::AllocDataSpace(dev, ndim, shape, dtype, mem_scope);
-  }
-
-  // must be Hexagon device and VTCM scope after this point
-  CHECK_EQ(mem_scope.value(), "global.vtcm");
+  // NOTE: This check should be superfluous, but it's probably a good idea to leave it in
+  // until the AoT executor's multi-device dispatch code is mature. --cconvey 2022-08-26
   CHECK(TVMDeviceExtType(dev.device_type) == kDLHexagon) << "dev.device_type: " << dev.device_type;
 
-  size_t typesize = (dtype.bits / 8) * dtype.lanes;
+  CHECK(ndim >= 0 && ndim <= 2)
+      << "Hexagon Device API supports only 1d and 2d allocations, but received ndim = " << ndim;
 
-  size_t alignment = shape[ndim - 1] * typesize;
-  if (alignment < kHexagonAllocAlignment) {
-    alignment = kHexagonAllocAlignment;
-  }
+  const size_t typesize = (dtype.bits / 8) * dtype.lanes;
 
   if (ndim == 0) {
-    return hexbuffs.AllocateHexagonBuffer(typesize, alignment, mem_scope);
+    return hexbuffs.AllocateHexagonBuffer(typesize, kHexagonAllocAlignment, mem_scope);
   } else if (ndim == 1) {
     size_t nbytes = shape[0] * typesize;
-    return hexbuffs.AllocateHexagonBuffer(nbytes, alignment, mem_scope);
+    return hexbuffs.AllocateHexagonBuffer(nbytes, kHexagonAllocAlignment, mem_scope);
   } else if (ndim == 2) {
     size_t nallocs = shape[0];
     size_t nbytes = shape[1] * typesize;
-    return hexbuffs.AllocateHexagonBuffer(nallocs, nbytes, alignment, mem_scope);
+    return hexbuffs.AllocateHexagonBuffer(nallocs, nbytes, kHexagonAllocAlignment, mem_scope);
   } else {
-    LOG(FATAL) << "Hexagon Device API supports only 1d and 2d allocations, but received ndim = "
-               << ndim;
-    return nullptr;
+    return nullptr;  // unreachable
   }
 }
 

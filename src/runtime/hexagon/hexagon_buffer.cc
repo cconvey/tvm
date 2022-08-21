@@ -161,17 +161,23 @@ void* HexagonBuffer::GetPointer() {
 HexagonBuffer::StorageScope HexagonBuffer::GetStorageScope() const { return storage_scope_; }
 
 void HexagonBuffer::SetStorageScope(Optional<String> scope) {
-  if (!scope.defined()) {
+  const std::string s = scope.value_or("global");
+
+  if (s == "global") {
+    // TODO: Eventually remove "global" support entirely.
+    //
+    // It's not clear that "global" makes sense for Hexagon, because both DDR and VTCM memories are
+    // globally accessible, and users should probably be specific regarding which one they want.
+    // However, there's a non-trivial amount of of Hexagon unit-test code that assumes "global" is
+    // a valid scope name.  So for now we'll support it as an alias for "global.ddr", but longer
+    // term we shoud remove it.
     storage_scope_ = StorageScope::kDDR;
+  } else if (s == "global.ddr") {
+    storage_scope_ = StorageScope::kDDR;
+  } else if (s == "global.vtcm") {
+    storage_scope_ = StorageScope::kVTCM;
   } else {
-    if (scope.value() == "global") {
-      storage_scope_ = StorageScope::kDDR;
-    } else if (scope.value() == "global.vtcm") {
-      storage_scope_ = StorageScope::kVTCM;
-    } else {
-      CHECK(false) << "Encountered unknown HexagonBuffer storage scope: "
-                   << std::string(scope.value());
-    }
+    CHECK(false) << "Encountered unknown HexagonBuffer storage scope: " << std::string(s);
   }
 }
 
