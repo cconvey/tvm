@@ -54,8 +54,11 @@ ${BUILD_DIR}/%.o: src/%.c $(CRT_CONFIG)
 	${QUIET}${CC} ${CFLAGS} -c -o "$@" "$<"
 
 ${BUILD_DIR}/%.o: src/%.cc $(CRT_CONFIG)
-	${QUIET}mkdir -p $(dir $@)
-	${QUIET}${CXX} ${CXXFLAGS} -c -o "$@" "$<"
+	# ${QUIET}mkdir -p $(dir $@)
+	# ${QUIET}${CXX} ${CXXFLAGS} -c -o "$@" "$<"
+	mkdir -p $(dir $@)
+	echo "CXX is ${CXX}"
+	${CXX} ${CXXFLAGS} -c -o "$@" "$<"
 
 define LIB_template
 $${BUILD_DIR}/lib$(notdir $(1)).a: $$(patsubst src/%.c,$${BUILD_DIR}/%.o,$$(wildcard src/$(1:src/%=%)/*.c)) $$(patsubst src/%.cc,${BUILD_DIR}/%.o,$$(wildcard src/$(1:src/%=%)/*.cc))

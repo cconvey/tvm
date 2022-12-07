@@ -129,8 +129,9 @@ else()
 
     add_custom_command(
           OUTPUT ${crt_library_paths}
-          COMMAND make ARGS ${make_common_args} clean
-          COMMAND make ARGS ${make_common_args} all
+          COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}" "CC=${CMAKE_C_COMPILER}" make ARGS ${make_common_args} clean
+          COMMAND ${CMAKE_COMMAND} -E env "CXX=${CMAKE_CXX_COMPILER}" "CC=${CMAKE_C_COMPILER}" make ARGS ${make_common_args} all
+          # COMMAND env make ARGS ${make_common_args} all
           WORKING_DIRECTORY "${standalone_crt_base}"
           DEPENDS standalone_crt ${host_isolated_build_deps})
 

@@ -63,6 +63,8 @@ enum class CallingConv : int {
    * - Implementation: defined by device runtime(e.g. runtime/cuda)
    */
   kDeviceKernelLaunch = 2,
+
+  kIntraModule = 42,
 };
 
 /*!
