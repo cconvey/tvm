@@ -27,6 +27,7 @@
 #include <tvm/tir/transform.h>
 
 #include "ir_utils.h"
+#include "tvm/tir/var.h"
 
 namespace tvm {
 namespace tir {
@@ -110,6 +111,15 @@ class BufferAllocationLocator : public StmtExprMutator {
     CollectUnmanagedAllocations collector;
     collector(func->body);
     unmanaged_allocations_ = collector.unmanaged_allocations;
+
+// Experimental fix.
+#if 1
+    for (Var param : func->params) {
+      if (param->type_annotation.defined() && param->type_annotation.as<PointerTypeNode>()) {
+        unmanaged_allocations_.insert(param.get());
+      }
+    }
+#endif
 
     for (const auto& kv : func->buffer_map) {
       const Buffer& buffer = kv.second;

@@ -34,13 +34,15 @@ if [[ ${CI:-false} == "true" ]]; then
     echo set\(CMAKE_CXX_COMPILER "/opt/sccache/clang++"\) >> config.cmake
 else
     echo 'Skipping sccache setup for local build'
-    echo set\(CMAKE_CXX_COMPILER \"/usr/bin/c++\"\) >> config.cmake
-    echo set\(CMAKE_C_COMPILER \"/usr/bin/cc\"\) >> config.cmake
+    # echo set\(CMAKE_CXX_COMPILER \"/usr/bin/c++\"\) >> config.cmake
+    # echo set\(CMAKE_C_COMPILER \"/usr/bin/cc\"\) >> config.cmake
+    echo set\(CMAKE_CXX_COMPILER \"/mnt/data/r/cconvey/tvm/call-extern-ptr/llvm/llvmorg-15.0.6-install/bin/clang-15\"\) >> config.cmake
+    echo set\(CMAKE_C_COMPILER \"/mnt/data/r/cconvey/tvm/call-extern-ptr/llvm/llvmorg-15.0.6-install/bin/clang++-15\"\) >> config.cmake
 fi
 
 echo set\(USE_HEXAGON "ON"\) >> config.cmake
 echo set\(USE_HEXAGON_SDK "${HEXAGON_SDK_ROOT}"\) >> config.cmake
-echo set\(USE_CCACHE OFF\) >> config.cmake
+echo set\(USE_CCACHE ON\) >> config.cmake
 echo set\(BACKTRACE_ON_SEGFAULT ON\) >> config.cmake
 echo set\(SUMMARIZE ON\) >> config.cmake
 echo set\(USE_HEXAGON_QHL ON\) >> config.cmake
