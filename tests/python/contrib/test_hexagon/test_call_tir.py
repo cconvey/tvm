@@ -15,51 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 
-from typing import List
-import tvm
-import tvm.testing
-from tvm.script import tir as T
-import pytest
-
-
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
 """ Various tests related to the (WIP) support for having
 one PrimFunc call another PrimFunc within the same IRModule.
 """
 
-import os
-import os.path
-import sys
-import tempfile
+from typing import List
 
+# import pytest
 import numpy as np
-import pytest
 
-import tvm.script
+import tvm
 import tvm.testing
+import tvm.script
 from tvm.script import tir as T
 
 from tvm.contrib.hexagon.session import Session
 from tvm.contrib.hexagon import allocate_hexagon_array
-
 from .infrastructure import get_hexagon_target
-
-# from .benchmark_util import get_benchmark_id
 
 # --------------------------------------------------------------------------------------------------
 # Test parameters
@@ -67,7 +39,7 @@ from .infrastructure import get_hexagon_target
 
 # The shape of the original (unsplit) tensors.
 # We assume that each shape describes a non-empty 2D tensor.
-original_shape = tvm.testing.parameter(
+ORIGINAL_SHAPE = tvm.testing.parameter(
     # degenerate cases...
     [1, 1],
     [1, 3],
@@ -76,7 +48,7 @@ original_shape = tvm.testing.parameter(
     [3, 5],
 )
 
-dtype = tvm.testing.parameter("int8")
+DTYPE = tvm.testing.parameter("int8")
 
 # --------------------------------------------------------------------------------------------------
 # Helper functions / definitions...
@@ -140,6 +112,8 @@ def evaluate_ir_module_(
     reference_input_np = get_reference_input_tensor_(shape, dtype)
     reference_output_np = get_reference_output_tensor_(shape, dtype)
 
+    # hexagon_mod_local = tvm.lower(ir_mod)
+
     hexagon_mod_local = tvm.build(
         ir_mod,
         target=get_hexagon_target("v69"),
@@ -172,9 +146,9 @@ def evaluate_ir_module_(
 
 @tvm.testing.requires_hexagon
 def test_baseline(
-    hexagon_session: Session, original_shape: List, dtype: str
+    hexagon_session: Session, ORIGINAL_SHAPE: List, DTYPE: str
 ) -> tvm.ir.module.IRModule:
-    dim0_size, dim1_size = original_shape
+    dim0_size, dim1_size = ORIGINAL_SHAPE
 
     @tvm.script.ir_module
     class AddOneBaseline:
@@ -191,17 +165,66 @@ def test_baseline(
             # We exchange data between function by handles, which are similar to pointer.
             T.func_attr({"global_symbol": "main", "tir.noalias": True})
 
-            A = T.match_buffer(a, original_shape, dtype=dtype)
-            B = T.match_buffer(b, original_shape, dtype=dtype)
+            A = T.match_buffer(a, ORIGINAL_SHAPE, dtype=DTYPE)
+            B = T.match_buffer(b, ORIGINAL_SHAPE, dtype=DTYPE)
 
             for i in range(dim0_size):
                 for j in range(dim1_size):
-                    B[i, j] = A[i, j] + T.cast(1, dtype)
+                    B[i, j] = A[i, j] + T.cast(1, DTYPE)
 
         # pylint: enable=no-self-argument,invalid-name,missing-function-docstring
 
-    evaluate_ir_module_(hexagon_session, original_shape, dtype, AddOneBaseline)
+    evaluate_ir_module_(hexagon_session, ORIGINAL_SHAPE, DTYPE, AddOneBaseline)
 
+
+@tvm.testing.requires_hexagon
+def test_pass_pointers(
+    hexagon_session: Session, ORIGINAL_SHAPE: List, DTYPE: str
+) -> tvm.ir.module.IRModule:
+    dim0_size, dim1_size = ORIGINAL_SHAPE
+
+    tile_shape = (dim1_size,)
+
+    assert type(dim0_size) == int
+
+    @tvm.script.ir_module
+    class AddOnePassPointers:
+        # pylint: disable=no-self-argument,invalid-name,missing-function-docstring
+        @T.prim_func
+        def main(a: T.handle, b: T.handle):
+            T.func_attr({"global_symbol": "main", "tir.noalias": True})
+
+            A = T.match_buffer(a, ORIGINAL_SHAPE, dtype=DTYPE)
+            B = T.match_buffer(b, ORIGINAL_SHAPE, dtype=DTYPE)
+
+            for i in range(dim0_size):
+                T.call_extern("", "callee", A.data, B.data, i)
+
+        @T.prim_func
+        def callee(a_data: T.Ptr[T.int8], b_data: T.Ptr[T.int8], i: T.int32):
+            T.func_attr(
+                {"global_symbol": "callee", "tir.noalias": True, "from_legacy_te_schedule": False}
+            )
+
+            # A_tile = T.buffer_decl(tile_shape, DTYPE, a_data, elem_offset=dim0_size * i)
+            # B_tile = T.buffer_decl(tile_shape, DTYPE, b_data, elem_offset=dim0_size * i)
+            A_tile = T.decl_buffer(tile_shape, DTYPE, data=a_data, elem_offset=dim0_size * i)
+            B_tile = T.decl_buffer(tile_shape, DTYPE, data=b_data, elem_offset=dim0_size * i)
+
+            for j in range(dim1_size):
+                B_tile[j] = A_tile[j] + T.int8(1)
+
+        # pylint: enable=no-self-argument,invalid-name,missing-function-docstring
+
+    breakpoint()
+
+    from .lunderberg_tvm_instrument import PrintTransformSequence
+
+    with tvm.transform.PassContext(instruments=[PrintTransformSequence()]):
+        evaluate_ir_module_(hexagon_session, ORIGINAL_SHAPE, DTYPE, AddOnePassPointers)
+
+
+# --------------------------------------------------------------------------------------------------
 
 if __name__ == "__main__":
     tvm.testing.main()
