@@ -63,6 +63,13 @@ enum class CallingConv : int {
    * - Implementation: defined by device runtime(e.g. runtime/cuda)
    */
   kDeviceKernelLaunch = 2,
+  /*!
+   * \brief For functions only called by other functions within the same IR module.
+   *
+   * Indicates that various signature transformations (e.g. those provided by the
+   * MakePackedAPI pass) are not desired.
+   */
+  kIntraModule = 3,
 };
 
 /*!
